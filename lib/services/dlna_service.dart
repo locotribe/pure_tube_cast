@@ -76,6 +76,22 @@ class PlaylistItem {
 }
 
 class DlnaService {
+  static final DlnaService _instance = DlnaService._internal();
+  factory DlnaService() => _instance;
+  DlnaService._internal();
+
+  // --- 接続状態管理 ---
+  DlnaDevice? _currentDevice;
+  final _connectedDeviceController = StreamController<DlnaDevice?>.broadcast();
+  Stream<DlnaDevice?> get connectedDeviceStream => _connectedDeviceController.stream;
+  DlnaDevice? get currentDevice => _currentDevice;
+
+  void setDevice(DlnaDevice? device) {
+    _currentDevice = device;
+    _connectedDeviceController.add(_currentDevice);
+    print("[DlnaService] Connected device set to: ${device?.name ?? 'None'}");
+  }
+
   final _deviceStreamController = StreamController<List<DlnaDevice>>.broadcast();
   Stream<List<DlnaDevice>> get deviceStream => _deviceStreamController.stream;
 

@@ -116,7 +116,7 @@ class PlaylistManager {
 
   // --- UIからの操作 ---
 
-  Future<void> processAndAdd(DlnaDevice device, DlnaService dlnaService, Map<String, dynamic> metadata) async {
+  Future<void> processAndAdd(DlnaService dlnaService, Map<String, dynamic> metadata, {DlnaDevice? device}) async {
     final newItem = LocalPlaylistItem(
       title: metadata['title'],
       originalUrl: metadata['url'],
@@ -135,7 +135,13 @@ class PlaylistManager {
       final streamUrl = await _ytService.fetchStreamUrl(newItem.originalUrl);
 
       if (streamUrl != null) {
-        await dlnaService.addToPlaylist(device, streamUrl, newItem.title, newItem.thumbnailUrl);
+        // デバイスが接続されている場合のみ送信
+        if (device != null) {
+          await dlnaService.addToPlaylist(device, streamUrl, newItem.title, newItem.thumbnailUrl);
+          print("[BG] Success: Sent to Kodi");
+        } else {
+          print("[BG] Device not connected. Saved locally only.");
+        }
 
         final index = _items.indexWhere((item) => item.id == newItem.id);
         if (index != -1) {
@@ -143,7 +149,6 @@ class PlaylistManager {
           _streamController.add(List.from(_items));
           _saveToStorage(); // 更新したら保存
         }
-        print("[BG] Success: Sent to Kodi");
       } else {
         throw Exception("Stream URL not found");
       }
@@ -172,6 +177,11 @@ class PlaylistManager {
       _streamController.add(List.from(_items));
       _saveToStorage(); // 削除したら保存
     }
+  }
+  void removeItems(Set<String> ids) {
+    _items.removeWhere((item) => ids.contains(item.id));
+    _streamController.add(List.from(_items));
+    _saveToStorage(); // 削除したら保存
   }
 
   void clear() {
