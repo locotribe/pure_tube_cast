@@ -21,6 +21,7 @@ dependencies:
 
   # 【追加】YouTubeアプリを起動するために必要
   url_launcher: ^6.2.0
+  html: ^0.15.4
 
 dev_dependencies:
   flutter_test:

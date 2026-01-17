@@ -89,7 +89,7 @@ class DlnaService {
   void setDevice(DlnaDevice? device) {
     _currentDevice = device;
     _connectedDeviceController.add(_currentDevice);
-    print("[DlnaService] Connected device set to: ${device?.name ?? 'None'}");
+    print("[DlnaService] Connected device set to: ${device?.name ?? 'None'} (${device?.ip})");
   }
 
   final _deviceStreamController = StreamController<List<DlnaDevice>>.broadcast();
@@ -360,6 +360,7 @@ class DlnaService {
 
   /// 1. 今すぐ再生 (割り込み)
   Future<void> playNow(DlnaDevice device, String videoUrl, String title, String? thumbnailUrl) async {
+    print("[DlnaService] playNow called: $title");
     try {
       await _sendJsonRpc(device, "Playlist.Clear", {"playlistid": 1});
       await _sendJsonRpc(device, "Playlist.Add", {
@@ -370,36 +371,46 @@ class DlnaService {
         "item": {"playlistid": 1, "position": 0},
         "options": {"resume": false}
       });
+      print("[DlnaService] playNow sent successfully");
       return;
     } catch (e) {
+      print("[DlnaService] playNow failed with JSON-RPC: $e. Trying DLNA Fallback...");
       await castVideoDlna(device, videoUrl, title);
     }
   }
 
   /// 2. リストに追加
   Future<void> addToPlaylist(DlnaDevice device, String videoUrl, String title, String? thumbnailUrl) async {
+    print("[DlnaService] addToPlaylist called: $title");
     try {
       await _sendJsonRpc(device, "Playlist.Add", {
         "playlistid": 1,
         "item": {"file": videoUrl}
       });
+      print("[DlnaService] addToPlaylist sent successfully");
     } catch (e) {
+      print("[DlnaService] addToPlaylist failed: $e");
       throw Exception("Kodiへの接続に失敗しました");
     }
   }
 
-  /// 3. 【追加】リスト内の指定位置を再生
+  /// 3. リスト内の指定位置を再生
   Future<void> playFromPlaylist(DlnaDevice device, int index) async {
-    print("[DEBUG] Play from Playlist at index: $index");
-    await _sendJsonRpc(device, "Player.Open", {
-      "item": {"playlistid": 1, "position": index}
-    });
+    print("[DlnaService] playFromPlaylist called. Index: $index");
+    try {
+      await _sendJsonRpc(device, "Player.Open", {
+        "item": {"playlistid": 1, "position": index}
+      });
+      print("[DlnaService] playFromPlaylist sent successfully");
+    } catch (e) {
+      print("[DlnaService] playFromPlaylist failed: $e");
+      rethrow;
+    }
   }
 
-  /// 4. 【追加】リスト項目の移動 (並べ替え)
+  /// 4. リスト項目の移動 (並べ替え)
   Future<void> movePlaylistItem(DlnaDevice device, int fromIndex, int toIndex) async {
-    print("[DEBUG] Move Playlist Item: $fromIndex -> $toIndex");
-    // KodiのPlaylist.Moveは「item1をitem2の位置へ移動」ではなく「item1を特定の位置へ」
+    print("[DlnaService] movePlaylistItem: $fromIndex -> $toIndex");
     await _sendJsonRpc(device, "Playlist.Move", {
       "playlistid": 1,
       "item": fromIndex,
@@ -407,9 +418,9 @@ class DlnaService {
     });
   }
 
-  /// 5. 【追加】リスト項目の削除
+  /// 5. リスト項目の削除
   Future<void> removeFromPlaylist(DlnaDevice device, int index) async {
-    print("[DEBUG] Remove from Playlist: $index");
+    print("[DlnaService] removeFromPlaylist: $index");
     await _sendJsonRpc(device, "Playlist.Remove", {
       "playlistid": 1,
       "position": index
@@ -426,6 +437,9 @@ class DlnaService {
       "id": 1
     });
 
+    print("[DlnaService] Sending JSON-RPC to ${device.ip}: $method");
+    print("[DlnaService] Params: $params");
+
     try {
       final response = await http.post(
           kodiUrl,
@@ -433,14 +447,23 @@ class DlnaService {
           body: body
       ).timeout(const Duration(seconds: 5));
 
+      print("[DlnaService] Response Status: ${response.statusCode}");
+
       if (response.statusCode == 200) {
+        // レスポンスが長すぎる場合に見やすくする工夫は必要ですが、まずはそのまま表示
+        print("[DlnaService] Response Body: ${response.body}");
+
         final decoded = jsonDecode(response.body);
         if (decoded.containsKey('error')) {
+          print("[DlnaService] JSON-RPC Error Detected: ${decoded['error']}");
           throw Exception("Kodi Error: ${decoded['error']}");
         }
         return decoded['result'];
+      } else {
+        print("[DlnaService] HTTP Error Body: ${response.body}");
       }
     } catch (e) {
+      print("[DlnaService] Exception during request: $e");
       rethrow;
     }
   }
@@ -448,6 +471,7 @@ class DlnaService {
   // --- 旧 DLNAキャスト ---
   Future<void> castVideoDlna(DlnaDevice device, String videoUrl, String title) async {
     final fullControlUrl = 'http://${device.ip}:${device.port}${device.controlUrl}';
+    print("[DlnaService] Fallback to DLNA Cast: $fullControlUrl");
     try {
       await _sendSoap(fullControlUrl, device.serviceType, 'SetAVTransportURI', {
         'InstanceID': '0',
@@ -459,6 +483,7 @@ class DlnaService {
         'Speed': '1',
       });
     } catch (e) {
+      print("[DlnaService] DLNA Cast failed: $e");
       throw Exception("DLNA送信失敗");
     }
   }

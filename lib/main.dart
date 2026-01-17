@@ -1,14 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:receive_sharing_intent/receive_sharing_intent.dart'; // import残存（念のため）
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
 
-import 'managers/playlist_manager.dart';
-import 'pages/playlist_page.dart';
-import 'pages/home_page.dart'; // 新規作成したページ
-import 'services/youtube_service.dart';
+import 'pages/home_page.dart'; // HomePageへ遷移するため
 import 'services/dlna_service.dart';
 
 final DlnaService _dlnaService = DlnaService();
@@ -31,13 +26,13 @@ class MyApp extends StatelessWidget {
         useMaterial3: true,
         scaffoldBackgroundColor: Colors.white,
       ),
-      home: const HomePage(), // 変更: DeviceListPage -> HomePage
+      home: const HomePage(),
     );
   }
 }
 
 // ----------------------------------------------------------------
-// 画面1: デバイス管理（変更: 接続を設定して戻る画面へ）
+// 画面1: デバイス管理
 // ----------------------------------------------------------------
 class DeviceListPage extends StatefulWidget {
   const DeviceListPage({super.key});
@@ -50,7 +45,6 @@ class _DeviceListPageState extends State<DeviceListPage> with WidgetsBindingObse
   List<DlnaDevice> _devices = [];
   bool _isSearching = false;
   Map<String, String> _customNames = {};
-  // 選択中のIP (ローカルstate)
   String? _selectedDeviceIp;
 
   late StreamSubscription _deviceListSubscription;
@@ -63,7 +57,6 @@ class _DeviceListPageState extends State<DeviceListPage> with WidgetsBindingObse
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // 現在接続中のデバイスがあればそれを初期選択にする
     if (_dlnaService.currentDevice != null) {
       _selectedDeviceIp = _dlnaService.currentDevice!.ip;
     }
@@ -212,7 +205,6 @@ class _DeviceListPageState extends State<DeviceListPage> with WidgetsBindingObse
             TextButton(
               onPressed: () {
                 Navigator.pop(context);
-                // 成功したら選択状態にする
                 if (isConnected) {
                   setState(() => _selectedDeviceIp = device.ip);
                 }
@@ -225,7 +217,6 @@ class _DeviceListPageState extends State<DeviceListPage> with WidgetsBindingObse
     }
   }
 
-  // 変更: 接続を確定して戻る
   void _connectAndReturn() {
     if (_selectedDeviceIp == null) return;
 
@@ -239,7 +230,7 @@ class _DeviceListPageState extends State<DeviceListPage> with WidgetsBindingObse
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text("${device.name} に接続しました")),
     );
-    Navigator.pop(context); // 呼び出し元に戻る
+    Navigator.pop(context);
   }
 
   Future<void> _addSavedIp(String ip) async {
@@ -353,7 +344,6 @@ class _DeviceListPageState extends State<DeviceListPage> with WidgetsBindingObse
           ),
         ],
       ),
-      // 変更: FABは「接続（設定）」ボタンに変更
       floatingActionButton: _selectedDeviceIp != null
           ? FloatingActionButton.extended(
         onPressed: _connectAndReturn,
@@ -362,275 +352,6 @@ class _DeviceListPageState extends State<DeviceListPage> with WidgetsBindingObse
         backgroundColor: Colors.green,
       )
           : null,
-    );
-  }
-}
-
-// ----------------------------------------------------------------
-// 画面2: キャスト待機・操作画面（変更: URLを受け取る仕様へ）
-// ----------------------------------------------------------------
-class CastPage extends StatefulWidget {
-  // 変更: デバイス必須を廃止し、URLを受け取る形へ
-  final String? initialUrl;
-
-  const CastPage({super.key, this.initialUrl});
-
-  @override
-  State<CastPage> createState() => _CastPageState();
-}
-
-class _CastPageState extends State<CastPage> {
-  final YoutubeService _ytService = YoutubeService();
-  final PlaylistManager _playlistManager = PlaylistManager();
-
-  String _statusMessage = "読み込み中...";
-  Map<String, dynamic>? _videoMetadata;
-  bool _isLoading = false;
-
-  @override
-  void initState() {
-    super.initState();
-    // 変更: HomePageから渡されたURLを処理
-    if (widget.initialUrl != null) {
-      _processSharedText(widget.initialUrl!);
-    } else {
-      _statusMessage = "URLが指定されていません";
-    }
-  }
-
-  Future<void> _processSharedText(String sharedText) async {
-    print("[CastPage] Processing URL: $sharedText");
-    if (mounted) {
-      setState(() {
-        _isLoading = true;
-        _statusMessage = "基本情報を取得中...";
-        _videoMetadata = null;
-      });
-    }
-
-    final match = RegExp(r'(https?://\S+)').firstMatch(sharedText);
-    if (match != null) {
-      final url = match.group(0)!;
-      try {
-        final metadata = await _ytService.fetchMetadata(url);
-        if (mounted) {
-          if (metadata != null) {
-            setState(() {
-              _videoMetadata = metadata;
-              _statusMessage = "操作を選択してください";
-              _isLoading = false;
-            });
-          } else {
-            setState(() {
-              _statusMessage = "動画情報の取得に失敗しました";
-              _isLoading = false;
-            });
-          }
-        }
-      } catch (e) {
-        if (mounted) setState(() {
-          _statusMessage = "エラー: $e";
-          _isLoading = false;
-        });
-      }
-    } else {
-      if (mounted) setState(() {
-        _statusMessage = "有効なURLが見つかりませんでした";
-        _isLoading = false;
-      });
-    }
-  }
-
-  // 今すぐ再生
-  void _playNow() async {
-    if (_videoMetadata == null) return;
-    final currentDevice = _dlnaService.currentDevice;
-
-    if (currentDevice == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("デバイスに接続されていません。デバイス管理から接続してください。"))
-      );
-      return;
-    }
-
-    setState(() => _isLoading = true);
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('再生準備中...')));
-
-    try {
-      final streamUrl = await _ytService.fetchStreamUrl(_videoMetadata!['url']);
-      if (streamUrl == null) throw Exception("Stream URL取得失敗");
-
-      await _dlnaService.playNow(
-          currentDevice,
-          streamUrl,
-          _videoMetadata!['title'],
-          _videoMetadata!['thumbnailUrl']
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("再生失敗: $e"), backgroundColor: Colors.red));
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  // リストに追加（オフラインでも可）
-  void _addToList() {
-    if (_videoMetadata == null) return;
-
-    // 現在のデバイス（nullならオフライン追加）を渡す
-    _playlistManager.processAndAdd(
-        _dlnaService,
-        _videoMetadata!,
-        device: _dlnaService.currentDevice
-    );
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('リストに追加しました')),
-    );
-
-    // 追加したら一覧に戻るか、そのまま閉じるか
-    // ここでは閉じる
-    Navigator.pop(context);
-  }
-
-  void _openYouTube() async {
-    final Uri appUrl = Uri.parse('vnd.youtube://');
-    final Uri webUrl = Uri.parse('https://www.youtube.com');
-    if (await canLaunchUrl(appUrl)) {
-      await launchUrl(appUrl, mode: LaunchMode.externalApplication);
-    } else {
-      await launchUrl(webUrl, mode: LaunchMode.externalApplication);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // 接続状態の監視はしない（再生ボタン押下時にチェック）
-    return Stack(
-      children: [
-        Scaffold(
-          appBar: AppBar(
-            title: const Text("動画確認"),
-            leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.pop(context)),
-          ),
-          body: SingleChildScrollView(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              children: [
-                // サムネイル表示
-                Container(
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade100,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey.shade300),
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: Column(
-                    children: [
-                      if (_videoMetadata != null)
-                        AspectRatio(
-                          aspectRatio: 16 / 9,
-                          child: Image.network(_videoMetadata!['thumbnailUrl'], fit: BoxFit.cover),
-                        )
-                      else
-                        const Padding(
-                          padding: EdgeInsets.all(40),
-                          child: Icon(Icons.video_library, size: 60, color: Colors.red),
-                        ),
-
-                      Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          children: [
-                            Text(
-                              _videoMetadata?['title'] ?? "読み込み中...",
-                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                              textAlign: TextAlign.center,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 5),
-                            Text(_statusMessage, style: const TextStyle(color: Colors.grey)),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 20),
-
-                if (_videoMetadata != null) ...[
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _playNow,
-                          icon: const Icon(Icons.play_arrow, size: 28),
-                          label: const Text("今すぐ再生", style: TextStyle(fontSize: 16)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.red,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            elevation: 3,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 15),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _addToList,
-                          icon: const Icon(Icons.playlist_add, size: 28),
-                          label: const Text("リストに追加", style: TextStyle(fontSize: 16)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.blue,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            elevation: 3,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-
-                const SizedBox(height: 40),
-
-                // YouTubeに戻るボタン
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: _openYouTube,
-                    label: const Text("YouTubeに戻る"),
-                    icon: const Icon(Icons.open_in_new),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-
-        if (_isLoading)
-          Container(
-            color: Colors.black.withOpacity(0.5),
-            child: const Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircularProgressIndicator(color: Colors.white),
-                  SizedBox(height: 20),
-                  Text(
-                    "処理中...",
-                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                ],
-              ),
-            ),
-          ),
-      ],
     );
   }
 }

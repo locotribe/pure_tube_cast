@@ -52,9 +52,6 @@ class _PlaylistPageState extends State<PlaylistPage> {
               // マネージャーで一括削除
               _manager.removeItems(_selectedIds);
 
-              // Kodi側への同期は複雑なため、ここではローカルのみ削除とする
-              // (ユーザーが次回「再生」などのアクションをした際に同期される想定)
-
               Navigator.pop(ctx); // ダイアログを閉じる
               _toggleSelectionMode(); // 通常モードに戻す
 
@@ -105,7 +102,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                     isConnected ? Icons.cast_connected : Icons.cast,
                     color: isConnected ? Colors.green : Colors.grey,
                   ),
-                  tooltip: isConnected ? "接続中: ${currentDevice.name}" : "デバイス未接続",
+                  tooltip: isConnected ? "接続中: ${currentDevice?.name}" : "デバイス未接続",
                   onPressed: () {
                     Navigator.push(
                       context,
@@ -169,8 +166,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                 );
               }
 
-              // ReorderableListViewだとCheckboxの挙動と干渉しやすいため、
-              // 選択モード時は通常のListView、通常時はReorderableListViewにする
+              // 選択モード時は通常のListView
               if (_isSelectionMode) {
                 return ListView.builder(
                   padding: const EdgeInsets.all(12),
@@ -206,13 +202,13 @@ class _PlaylistPageState extends State<PlaylistPage> {
                 );
               }
 
-              // 通常モード（並べ替え・スワイプ削除・詳細表示あり）
+              // 通常モード
               return ReorderableListView.builder(
                 padding: const EdgeInsets.all(12),
                 itemCount: items.length,
                 onReorder: (oldIndex, newIndex) {
                   _manager.reorder(oldIndex, newIndex);
-                  if (isConnected) {
+                  if (isConnected && currentDevice != null) {
                     try {
                       _dlnaService.movePlaylistItem(currentDevice, oldIndex, newIndex < oldIndex ? newIndex : newIndex - 1);
                     } catch (e) {
@@ -233,7 +229,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                     ),
                     onDismissed: (direction) {
                       _manager.removeItem(index);
-                      if (isConnected) {
+                      if (isConnected && currentDevice != null) {
                         try {
                           _dlnaService.removeFromPlaylist(currentDevice, index);
                         } catch (e) { /* 無視 */ }
@@ -293,7 +289,8 @@ class _PlaylistPageState extends State<PlaylistPage> {
                             ? const Text("エラー", style: TextStyle(color: Colors.red, fontSize: 12))
                             : null,
                         onTap: () {
-                          // 詳細ダイアログを表示
+                          // ログ追加
+                          print("[UI] Playlist item tapped: ${item.title} (ID: ${item.id})");
                           _showDetailDialog(context, item, index, isConnected, currentDevice);
                         },
                       ),
@@ -370,14 +367,21 @@ class _PlaylistPageState extends State<PlaylistPage> {
               backgroundColor: isConnected ? Colors.red : Colors.grey,
               foregroundColor: Colors.white,
             ),
-            onPressed: () {
+            onPressed: () async {
+              print("[UI] 'Play' button pressed for index: $index");
               if (isConnected && currentDevice != null && !item.isResolving && !item.hasError) {
-                _dlnaService.playFromPlaylist(currentDevice, index);
+                try {
+                  await _dlnaService.playFromPlaylist(currentDevice, index);
+                  print("[UI] Play command request finished");
+                } catch(e) {
+                  print("[UI] Play command failed: $e");
+                }
                 Navigator.pop(ctx);
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(content: Text('再生中: ${item.title}'), duration: const Duration(seconds: 1)),
                 );
               } else if (!isConnected) {
+                print("[UI] Button pressed but device not connected");
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('デバイスに接続してください')),
                 );

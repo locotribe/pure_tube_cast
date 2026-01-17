@@ -7,7 +7,7 @@ import '../services/youtube_service.dart';
 
 // 再生リストのアイテム情報
 class LocalPlaylistItem {
-  final String id; // クラッシュ回避のためのユニークID
+  final String id;
   final String title;
   final String originalUrl;
   final String? streamUrl;
@@ -18,7 +18,7 @@ class LocalPlaylistItem {
   bool hasError;
 
   LocalPlaylistItem({
-    String? id, // IDは自動生成
+    String? id,
     required this.title,
     required this.originalUrl,
     this.streamUrl,
@@ -34,7 +34,7 @@ class LocalPlaylistItem {
     bool? hasError,
   }) {
     return LocalPlaylistItem(
-      id: id, // IDは維持
+      id: id,
       title: title,
       originalUrl: originalUrl,
       thumbnailUrl: thumbnailUrl,
@@ -45,7 +45,6 @@ class LocalPlaylistItem {
     );
   }
 
-  // 保存用：JSONに変換
   Map<String, dynamic> toJson() {
     return {
       'id': id,
@@ -54,12 +53,11 @@ class LocalPlaylistItem {
       'streamUrl': streamUrl,
       'thumbnailUrl': thumbnailUrl,
       'durationStr': durationStr,
-      'isResolving': false, // 保存時は解析中フラグを落とす
+      'isResolving': false,
       'hasError': hasError,
     };
   }
 
-  // 復元用：JSONから変換
   factory LocalPlaylistItem.fromJson(Map<String, dynamic> json) {
     return LocalPlaylistItem(
       id: json['id'],
@@ -79,7 +77,7 @@ class PlaylistManager {
   factory PlaylistManager() => _instance;
 
   PlaylistManager._internal() {
-    _loadFromStorage(); // 起動時にロード
+    _loadFromStorage();
   }
 
   final List<LocalPlaylistItem> _items = [];
@@ -117,6 +115,8 @@ class PlaylistManager {
   // --- UIからの操作 ---
 
   Future<void> processAndAdd(DlnaService dlnaService, Map<String, dynamic> metadata, {DlnaDevice? device}) async {
+    print("[Manager] processAndAdd start: ${metadata['title']}");
+
     final newItem = LocalPlaylistItem(
       title: metadata['title'],
       originalUrl: metadata['url'],
@@ -127,7 +127,7 @@ class PlaylistManager {
 
     _items.add(newItem);
     _streamController.add(List.from(_items));
-    _saveToStorage(); // 追加したら保存
+    _saveToStorage();
 
     print("[BG] Start resolving: ${newItem.title}");
 
@@ -137,8 +137,13 @@ class PlaylistManager {
       if (streamUrl != null) {
         // デバイスが接続されている場合のみ送信
         if (device != null) {
-          await dlnaService.addToPlaylist(device, streamUrl, newItem.title, newItem.thumbnailUrl);
-          print("[BG] Success: Sent to Kodi");
+          try {
+            print("[Manager] Sending to Kodi playlist...");
+            await dlnaService.addToPlaylist(device, streamUrl, newItem.title, newItem.thumbnailUrl);
+            print("[Manager] Success: Sent to Kodi");
+          } catch(e) {
+            print("[Manager] Failed to add to Kodi: $e");
+          }
         } else {
           print("[BG] Device not connected. Saved locally only.");
         }
@@ -158,7 +163,7 @@ class PlaylistManager {
       if (index != -1) {
         _items[index] = newItem.copyWith(isResolving: false, hasError: true);
         _streamController.add(List.from(_items));
-        _saveToStorage(); // エラー状態も保存
+        _saveToStorage();
       }
     }
   }
@@ -168,16 +173,17 @@ class PlaylistManager {
     final item = _items.removeAt(oldIndex);
     _items.insert(newIndex, item);
     _streamController.add(List.from(_items));
-    _saveToStorage(); // 並べ替えたら保存
+    _saveToStorage();
   }
 
   void removeItem(int index) {
     if (index >= 0 && index < _items.length) {
       _items.removeAt(index);
       _streamController.add(List.from(_items));
-      _saveToStorage(); // 削除したら保存
+      _saveToStorage();
     }
   }
+
   void removeItems(Set<String> ids) {
     _items.removeWhere((item) => ids.contains(item.id));
     _streamController.add(List.from(_items));
@@ -187,6 +193,6 @@ class PlaylistManager {
   void clear() {
     _items.clear();
     _streamController.add([]);
-    _saveToStorage(); // クリアしたら保存
+    _saveToStorage();
   }
 }
