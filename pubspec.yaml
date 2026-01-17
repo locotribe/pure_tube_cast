@@ -1,0 +1,33 @@
+name: pure_tube_cast
+description: "YouTube caster for old devices"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.8.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  youtube_explode_dart: ^2.0.2
+  upnp_client: ^1.0.1
+  xml: ^6.3.0
+  receive_sharing_intent: ^1.8.1
+  shared_preferences: ^2.2.2
+  cupertino_icons: ^1.0.8
+  http: ^1.2.0
+
+  # 【追加】YouTubeアプリを起動するために必要
+  url_launcher: ^6.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^5.0.0
+
+flutter:
+
+  uses-material-design: true
