@@ -67,9 +67,13 @@ class WebVideoView extends StatelessWidget {
       borderRadius: BorderRadius.circular(16),
       child: Container(
         decoration: BoxDecoration(
-          color: Colors.white,
+          // 【修正】テーマのカード色を使用
+          color: Theme.of(context).cardColor,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.grey.shade200),
+          border: Border.all(
+            // 【修正】ボーダー色を薄く、ダークモード対応
+            color: Theme.of(context).dividerColor.withOpacity(0.1),
+          ),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withOpacity(0.05),

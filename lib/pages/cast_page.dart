@@ -296,9 +296,11 @@ class _CastPageState extends State<CastPage> {
                 Container(
                   width: double.infinity,
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade100,
+                    // 【修正】背景色をテーマに合わせて変更 (Surface Variantなど)
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey.shade300),
+                    // 【修正】ボーダーもテーマ依存または削除
+                    border: Border.all(color: Theme.of(context).dividerColor),
                   ),
                   clipBehavior: Clip.antiAlias,
                   child: Column(
@@ -310,7 +312,7 @@ class _CastPageState extends State<CastPage> {
                             _videoMetadata!['thumbnailUrl'],
                             fit: BoxFit.cover,
                             errorBuilder: (c, e, s) => Container(
-                              color: Colors.grey.shade300,
+                              color: Theme.of(context).colorScheme.surfaceContainerHighest,
                               child: const Icon(Icons.broken_image, size: 50, color: Colors.grey),
                             ),
                           ),
@@ -328,9 +330,7 @@ class _CastPageState extends State<CastPage> {
                             Text(
                               _videoMetadata?['title'] ?? "読み込み中...",
                               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                              textAlign: TextAlign.center,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
+                              // 色指定を削除すれば自動で白/黒になる
                             ),
                             const SizedBox(height: 5),
                             Text(_statusMessage, style: const TextStyle(color: Colors.grey)),

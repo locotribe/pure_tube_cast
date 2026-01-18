@@ -321,7 +321,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                       fontWeight: isPlaying ? FontWeight.bold : FontWeight.normal,
-                      color: isPlaying ? Colors.red : Colors.black
+                    color: isPlaying ? Colors.red : Theme.of(context).colorScheme.onSurface,
                   ),
                 ),
 
@@ -452,7 +452,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                 leading: Icon(Icons.folder, color: isCurrent ? Colors.grey : Colors.orange),
                 title: Text(
                   list.name,
-                  style: TextStyle(color: isCurrent ? Colors.grey : Colors.black),
+                  style: TextStyle(color: isCurrent ? Colors.grey : Theme.of(context).colorScheme.onSurface),
                 ),
                 subtitle: Text("${list.items.length} items"),
                 enabled: !isCurrent,

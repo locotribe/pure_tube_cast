@@ -281,12 +281,16 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
               final bool isConnected = _selectedDeviceIp == device.ip;
 
               return Card(
-                color: isConnected ? Colors.green.shade50 : null,
+                // 【修正】接続中の色をダークモードでも見やすく（半透明にするなど）
+                color: isConnected
+                    ? Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3)
+                    : null,
                 margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 child: ListTile(
                   leading: Icon(
                       Icons.tv,
-                      color: isConnected ? Colors.green : Colors.grey
+                      // 【修正】アイコン色
+                      color: isConnected ? Theme.of(context).colorScheme.primary : Colors.grey
                   ),
                   title: Text(device.name, style: const TextStyle(fontWeight: FontWeight.bold)),
                   subtitle: Text(device.ip),

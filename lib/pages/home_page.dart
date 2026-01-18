@@ -11,6 +11,7 @@ import '../managers/site_manager.dart';
 import '../managers/playlist_manager.dart'; // PlaylistManager追加
 import '../pages/playlist_page.dart';
 import 'cast_page.dart';
+import 'settings_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -36,6 +37,8 @@ class _HomePageState extends State<HomePage> {
     _intentStreamSubscription?.cancel();
     super.dispose();
   }
+
+
 
   void _setupSharingListener() {
     _intentStreamSubscription = ReceiveSharingIntent.instance.getMediaStream().listen(
@@ -295,6 +298,18 @@ class _HomePageState extends State<HomePage> {
         title: const Text("PureTube Cast"),
         elevation: 0,
         actions: [
+          // 【追加】設定ボタン
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: "設定",
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SettingsPage()),
+              );
+            },
+          ),
+          // 既存の追加ボタンはWebタブの時のみ表示などの制御があれば調整
           if (_selectedIndex == 0)
             IconButton(
               icon: const Icon(Icons.add_link),

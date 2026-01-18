@@ -80,7 +80,7 @@ class LibraryView extends StatelessWidget {
                           playlist.name,
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
-                            color: isPlaying ? Colors.red : Colors.black,
+                            color: isPlaying ? Colors.red : Theme.of(context).colorScheme.onSurface,
                           ),
                         ),
                         subtitle: Text("${playlist.items.length} videos"),
