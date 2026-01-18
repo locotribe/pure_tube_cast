@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
+import 'package:http/http.dart' as http; // 追加
+import 'package:html/parser.dart' as parser; // 追加
 
 import '../views/device_view.dart';
 import '../views/web_video_view.dart';
@@ -48,20 +50,95 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  // 【改修】共有されたテキスト(URL)の処理分岐
   void _handleSharedText(String sharedText) {
     if (!mounted) return;
+
+    // URL共有時にアクションを選択させる
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Text("共有されたURLの操作", style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.movie_creation, color: Colors.red, size: 32),
+                title: const Text("動画として解析"),
+                subtitle: const Text("動画リストに追加します"),
+                onTap: () {
+                  Navigator.pop(context); // シートを閉じる
+                  _navigateToCastPage(sharedText);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.public, color: Colors.blue, size: 32),
+                title: const Text("Webサイトとして登録"),
+                subtitle: const Text("タイトルを取得してブックマークします"),
+                onTap: () {
+                  Navigator.pop(context); // シートを閉じる
+                  _fetchTitleAndShowAddDialog(sharedText);
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // 1. 動画として解析（従来通りのフロー）
+  void _navigateToCastPage(String url) {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => CastPage(initialUrl: sharedText),
+        builder: (context) => CastPage(initialUrl: url),
       ),
     );
   }
 
+  // 2. タイトルを取得してサイト登録ダイアログを表示
+  Future<void> _fetchTitleAndShowAddDialog(String url) async {
+    // ローディング表示
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    String title = "";
+    try {
+      // ページのHTMLを取得してタイトル抽出
+      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        final document = parser.parse(response.body);
+        title = document.querySelector('title')?.text ?? "";
+      }
+    } catch (e) {
+      print("[HomePage] Title fetch error: $e");
+    }
+
+    if (!mounted) return;
+    Navigator.pop(context); // ローディングを閉じる
+
+    // 取得した情報でダイアログを開く
+    _showAddSiteDialog(initialName: title, initialUrl: url);
+  }
+
   // --- サイト追加ダイアログ ---
-  void _showAddSiteDialog() {
-    final nameController = TextEditingController();
-    final urlController = TextEditingController();
+  // 【改修】初期値を受け取れるように変更
+  void _showAddSiteDialog({String? initialName, String? initialUrl}) {
+    final nameController = TextEditingController(text: initialName);
+    final urlController = TextEditingController(text: initialUrl);
 
     showDialog(
       context: context,
@@ -76,6 +153,7 @@ class _HomePageState extends State<HomePage> {
                 decoration: const InputDecoration(
                   labelText: "サイト名 (例: Vimeo)",
                   border: OutlineInputBorder(),
+                  hintText: "サイト名を入力",
                 ),
               ),
               const SizedBox(height: 10),
@@ -86,6 +164,8 @@ class _HomePageState extends State<HomePage> {
                   border: OutlineInputBorder(),
                 ),
                 keyboardType: TextInputType.url,
+                maxLines: 3, // URLが長い場合に見やすくする
+                minLines: 1,
               ),
             ],
           ),
@@ -102,9 +182,18 @@ class _HomePageState extends State<HomePage> {
               if (name.isNotEmpty && url.isNotEmpty) {
                 _siteManager.addSite(name, url);
                 Navigator.pop(context);
+
+                // 登録完了のフィードバックと、タブ移動（もし別のタブにいたら）
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(content: Text("$name を追加しました")),
                 );
+
+                // 動画サイトタブへ移動して追加を確認しやすくする
+                if (_selectedIndex != 0) {
+                  setState(() {
+                    _selectedIndex = 0;
+                  });
+                }
               }
             },
             child: const Text("追加"),
@@ -121,12 +210,11 @@ class _HomePageState extends State<HomePage> {
         title: const Text("PureTube Cast"),
         elevation: 0,
         actions: [
-          // 【変更】一番左(index 0)が動画サイトになったので条件を変更
           if (_selectedIndex == 0)
             IconButton(
               icon: const Icon(Icons.add_link),
               tooltip: "サイトを追加",
-              onPressed: _showAddSiteDialog,
+              onPressed: () => _showAddSiteDialog(), // 手動追加時は引数なし
             ),
         ],
       ),
@@ -139,7 +227,6 @@ class _HomePageState extends State<HomePage> {
             color: Theme.of(context).primaryColor.withOpacity(0.05),
             child: Row(
               children: [
-                // 【変更】並び順を入れ替え: Web(0) -> Library(1) -> Connect(2)
                 _buildTabItem(0, Icons.public, "動画サイト"),
                 _buildTabItem(1, Icons.folder_copy, "ライブラリ"),
                 _buildTabItem(2, Icons.settings_remote, "接続"),
@@ -152,8 +239,7 @@ class _HomePageState extends State<HomePage> {
             child: IndexedStack(
               index: _selectedIndex,
               children: const [
-                // 【変更】並び順を入れ替え
-                WebVideoView(),  // index 0 (起動直後はここ)
+                WebVideoView(),  // index 0
                 LibraryView(),   // index 1
                 DeviceView(),    // index 2
               ],
