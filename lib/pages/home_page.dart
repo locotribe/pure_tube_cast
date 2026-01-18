@@ -1,13 +1,12 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
-import 'package:url_launcher/url_launcher.dart';
-import '../main.dart'; // DeviceListPageへのアクセス
-import 'playlist_page.dart';
-import 'cast_page.dart'; // CastPageへのアクセス
+
+import '../views/device_view.dart';
+import '../views/web_video_view.dart';
+import '../views/library_view.dart';
 import '../managers/site_manager.dart';
-import '../models/site_model.dart';
-import 'playlists_page.dart';
+import 'cast_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -17,6 +16,9 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  // タブの選択インデックス (0:動画サイト, 1:ライブラリ, 2:接続)
+  int _selectedIndex = 0;
+
   StreamSubscription? _intentStreamSubscription;
   final SiteManager _siteManager = SiteManager();
 
@@ -32,7 +34,7 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
-  // YouTubeなどからの共有を監視
+  // --- 共有受け取りロジック ---
   void _setupSharingListener() {
     _intentStreamSubscription = ReceiveSharingIntent.instance.getMediaStream().listen(
           (List<SharedMediaFile> value) {
@@ -56,20 +58,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _openUrl(String url) async {
-    final Uri uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("URLを開けませんでした: $url")),
-        );
-      }
-    }
-  }
-
-  // サイト追加ダイアログ
+  // --- サイト追加ダイアログ ---
   void _showAddSiteDialog() {
     final nameController = TextEditingController();
     final urlController = TextEditingController();
@@ -78,7 +67,6 @@ class _HomePageState extends State<HomePage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text("サイトを登録"),
-        // 【修正1】キーボードが出てもスクロールできるようにラップ
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -129,171 +117,46 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("PureTube Cast")),
-      // 【修正3】キーボード表示時に背面のリストなどが潰れるのを防ぐ
-      resizeToAvoidBottomInset: false,
-      drawer: Drawer(
-        child: ListView(
-          padding: EdgeInsets.zero,
-          children: [
-            const DrawerHeader(
-              decoration: BoxDecoration(color: Colors.red),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  Text(
-                    'メニュー',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    '動画サイトを管理',
-                    style: TextStyle(color: Colors.white70, fontSize: 14),
-                  ),
-                ],
-              ),
+      appBar: AppBar(
+        title: const Text("PureTube Cast"),
+        elevation: 0,
+        actions: [
+          // 【変更】一番左(index 0)が動画サイトになったので条件を変更
+          if (_selectedIndex == 0)
+            IconButton(
+              icon: const Icon(Icons.add_link),
+              tooltip: "サイトを追加",
+              onPressed: _showAddSiteDialog,
             ),
-            ListTile(
-              leading: const Icon(Icons.add_link),
-              title: const Text('新しいサイトを登録'),
-              onTap: () {
-                Navigator.pop(context); // ドロワーを閉じる
-                _showAddSiteDialog();
-              },
-            ),
-          ],
-        ),
+        ],
       ),
+      resizeToAvoidBottomInset: false,
+
       body: Column(
         children: [
-          const SizedBox(height: 20),
-          // 上部：メイン操作ボタン
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
+          // --- 上部カスタムタブバー ---
+          Container(
+            color: Theme.of(context).primaryColor.withOpacity(0.05),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const SizedBox(width: 16),
-                _buildMenuCard(
-                  icon: Icons.settings_remote,
-                  label: "接続",
-                  color: Colors.blueGrey,
-                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DeviceListPage())),
-                ),
-                const SizedBox(width: 16),
-                _buildMenuCard(
-                  icon: Icons.play_circle_fill,
-                  label: "YouTube",
-                  color: Colors.red,
-                  onTap: () => _openUrl('https://www.youtube.com'),
-                ),
-                const SizedBox(width: 16),
-                _buildMenuCard(
-                  icon: Icons.playlist_play,
-                  label: "リスト",
-                  color: Colors.orange,
-                  onTap: () {
-                    // 【変更】ライブラリ画面へ遷移
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (context) => const PlaylistsPage()),
-                    );
-                  },
-                ),
-                const SizedBox(width: 16),
+                // 【変更】並び順を入れ替え: Web(0) -> Library(1) -> Connect(2)
+                _buildTabItem(0, Icons.public, "動画サイト"),
+                _buildTabItem(1, Icons.folder_copy, "ライブラリ"),
+                _buildTabItem(2, Icons.settings_remote, "接続"),
               ],
             ),
           ),
 
-          const SizedBox(height: 20),
-          const Divider(thickness: 1),
-
-          // 下部：登録サイトリスト
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              children: [
-                const Icon(Icons.bookmarks, color: Colors.grey),
-                const SizedBox(width: 8),
-                const Text(
-                  "登録サイト",
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.grey,
-                  ),
-                ),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.add_circle_outline, color: Colors.blue),
-                  onPressed: _showAddSiteDialog,
-                ),
-              ],
-            ),
-          ),
-
+          // --- メインコンテンツ ---
           Expanded(
-            child: StreamBuilder<List<SiteModel>>(
-              stream: _siteManager.sitesStream,
-              initialData: _siteManager.currentSites,
-              builder: (context, snapshot) {
-                final sites = snapshot.data ?? [];
-
-                if (sites.isEmpty) {
-                  return const Center(
-                    child: Text(
-                      "登録されたサイトはありません\n左上のメニューから追加してください",
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey),
-                    ),
-                  );
-                }
-
-                return ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  itemCount: sites.length,
-                  itemBuilder: (context, index) {
-                    final site = sites[index];
-                    return Card(
-                      elevation: 1,
-                      margin: const EdgeInsets.symmetric(vertical: 4),
-                      child: ListTile(
-                        leading: const CircleAvatar(
-                          backgroundColor: Colors.black12,
-                          child: Icon(Icons.public, color: Colors.white),
-                        ),
-                        title: Text(
-                          site.name,
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        subtitle: Text(
-                          site.url,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        onTap: () => _openUrl(site.url),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.delete_outline, color: Colors.grey),
-                          onPressed: () {
-                            _siteManager.removeSite(site.id);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('削除しました'),
-                                duration: Duration(milliseconds: 500),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    );
-                  },
-                );
-              },
+            child: IndexedStack(
+              index: _selectedIndex,
+              children: const [
+                // 【変更】並び順を入れ替え
+                WebVideoView(),  // index 0 (起動直後はここ)
+                LibraryView(),   // index 1
+                DeviceView(),    // index 2
+              ],
             ),
           ),
         ],
@@ -301,38 +164,43 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildMenuCard({
-    required IconData icon,
-    required String label,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        width: 100, // 横幅は揃える
-        // height: 100, 【修正2】高さ固定を廃止（中身に合わせて伸縮）
-        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withOpacity(0.3)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min, // 中身のサイズに合わせる
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 40, color: color),
-            const SizedBox(height: 8),
-            Text(
-              label,
-              style: TextStyle(color: color, fontWeight: FontWeight.bold),
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+  // タブボタンの構築
+  Widget _buildTabItem(int index, IconData icon, String label) {
+    final bool isSelected = _selectedIndex == index;
+    final Color color = isSelected ? Colors.red : Colors.grey;
+
+    return Expanded(
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            _selectedIndex = index;
+          });
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                color: isSelected ? Colors.red : Colors.transparent,
+                width: 3,
+              ),
             ),
-          ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: color),
+              const SizedBox(height: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  color: color,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

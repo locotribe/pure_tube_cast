@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../managers/playlist_manager.dart';
 import '../services/dlna_service.dart';
-import '../main.dart'; // DeviceListPageへの遷移用
+import 'connection_page.dart'; // 【変更】DeviceListPageの代わりにインポート
 
 class PlaylistPage extends StatefulWidget {
   final String? playlistId; // 表示するリストのID (nullならメイン)
@@ -105,7 +105,11 @@ class _PlaylistPageState extends State<PlaylistPage> {
                         color: isConnected ? Colors.green : Colors.grey,
                       ),
                       tooltip: isConnected ? "接続中: ${currentDevice?.name}" : "デバイス未接続",
-                      onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const DeviceListPage())),
+                      onPressed: () => Navigator.push(
+                        context,
+                        // 【変更】ConnectionPageへ遷移
+                        MaterialPageRoute(builder: (context) => const ConnectionPage()),
+                      ),
                     ),
                     PopupMenuButton<String>(
                       onSelected: (value) {
@@ -241,7 +245,6 @@ class _PlaylistPageState extends State<PlaylistPage> {
     );
   }
 
-  // 動画詳細ポップアップ（移動ボタン追加）
   void _showDetailDialog(BuildContext context, LocalPlaylistItem item, int index, bool isConnected, DlnaDevice? currentDevice) {
     showDialog(
       context: context,
@@ -258,19 +261,16 @@ class _PlaylistPageState extends State<PlaylistPage> {
             ),
           ],
         ),
-        actionsAlignment: MainAxisAlignment.spaceBetween, // ボタンを左右に配置
+        actionsAlignment: MainAxisAlignment.spaceBetween,
         actions: [
-          // 移動ボタン (左側)
           TextButton.icon(
             icon: const Icon(Icons.drive_file_move_outline),
             label: const Text("移動"),
             onPressed: () {
-              Navigator.pop(ctx); // 詳細ダイアログを閉じて
-              _showMoveToDialog(context, item); // 移動先選択ダイアログを開く
+              Navigator.pop(ctx);
+              _showMoveToDialog(context, item);
             },
           ),
-
-          // 右側のアクション群
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -296,10 +296,8 @@ class _PlaylistPageState extends State<PlaylistPage> {
     );
   }
 
-  // 移動先を選択するダイアログ
   void _showMoveToDialog(BuildContext context, LocalPlaylistItem item) {
     final playlists = _manager.currentPlaylists;
-    // 現在のリストIDを特定（nullならメインリストID）
     final currentListId = widget.playlistId ?? (playlists.isNotEmpty ? playlists.first.id : null);
 
     showDialog(
@@ -313,7 +311,6 @@ class _PlaylistPageState extends State<PlaylistPage> {
             itemCount: playlists.length,
             itemBuilder: (context, index) {
               final list = playlists[index];
-              // 自分自身のリストには移動できないようにする（グレーアウト or 非表示）
               final isCurrent = list.id == currentListId;
 
               return ListTile(
@@ -323,7 +320,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                   style: TextStyle(color: isCurrent ? Colors.grey : Colors.black),
                 ),
                 subtitle: Text("${list.items.length} items"),
-                enabled: !isCurrent, // 現在のリストは選択不可
+                enabled: !isCurrent,
                 onTap: () {
                   _manager.moveItemToPlaylist(
                     item.id,
