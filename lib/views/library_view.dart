@@ -13,7 +13,7 @@ class LibraryView extends StatelessWidget {
 
     return Stack(
       children: [
-        // デバイス接続状態を監視（再生ボタンの有効/無効のため）
+        // デバイス接続状態を監視
         StreamBuilder<DlnaDevice?>(
           stream: dlnaService.connectedDeviceStream,
           initialData: dlnaService.currentDevice,
@@ -35,12 +35,52 @@ class LibraryView extends StatelessWidget {
                   itemCount: playlists.length,
                   itemBuilder: (context, index) {
                     final playlist = playlists[index];
+
+                    // 【追加】このフォルダの中に「再生中」の動画があるかチェック
+                    final bool isPlaying = playlist.items.any((item) => item.isPlaying);
+
                     return Card(
-                      elevation: 2,
+                      elevation: isPlaying ? 4 : 2, // 再生中は少し浮き上がらせる
                       margin: const EdgeInsets.symmetric(vertical: 6),
+                      shape: isPlaying
+                          ? RoundedRectangleBorder(side: const BorderSide(color: Colors.red, width: 1.5), borderRadius: BorderRadius.circular(12))
+                          : null,
                       child: ListTile(
-                        leading: const Icon(Icons.folder, color: Colors.orange, size: 40),
-                        title: Text(playlist.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                        // 【変更】フォルダアイコンのデザイン分岐
+                        leading: SizedBox(
+                          width: 48,
+                          height: 48,
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              Icon(
+                                  Icons.folder,
+                                  color: isPlaying ? Colors.red : Colors.orange,
+                                  size: 40
+                              ),
+                              if (isPlaying)
+                                const Positioned(
+                                  bottom: 0,
+                                  right: 0,
+                                  child: Icon(Icons.play_circle_fill, color: Colors.white, size: 18),
+                                ),
+                              if (isPlaying)
+                                const Positioned(
+                                  bottom: 0,
+                                  right: 0,
+                                  child: Icon(Icons.play_circle_outline, color: Colors.red, size: 18),
+                                ),
+                            ],
+                          ),
+                        ),
+                        title: Text(
+                          playlist.name,
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            // 再生中はタイトルも赤く
+                            color: isPlaying ? Colors.red : Colors.black,
+                          ),
+                        ),
                         subtitle: Text("${playlist.items.length} videos"),
                         onTap: () {
                           Navigator.push(
@@ -50,11 +90,9 @@ class LibraryView extends StatelessWidget {
                             ),
                           );
                         },
-                        // 右側に再生ボタンとメニューを配置
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            // フォルダ再生ボタン
                             IconButton(
                               icon: const Icon(Icons.play_circle_fill, color: Colors.red, size: 32),
                               tooltip: "続きから再生 (または最初から)",
@@ -78,7 +116,6 @@ class LibraryView extends StatelessWidget {
                                 } else if (value == 'delete') {
                                   _showDeleteDialog(context, manager, playlist);
                                 } else if (value == 'play_start') {
-                                  // 最初から再生
                                   if (currentDevice != null && playlist.items.isNotEmpty) {
                                     manager.playSequence(currentDevice, playlist.id, 0);
                                     ScaffoldMessenger.of(context).showSnackBar(
@@ -143,7 +180,6 @@ class LibraryView extends StatelessWidget {
     );
   }
 
-  // エラーになっていたメソッドを復活
   void _showRenameDialog(BuildContext context, PlaylistManager manager, PlaylistModel playlist) {
     final controller = TextEditingController(text: playlist.name);
     showDialog(
@@ -170,7 +206,6 @@ class LibraryView extends StatelessWidget {
     );
   }
 
-  // エラーになっていたメソッドを復活
   void _showDeleteDialog(BuildContext context, PlaylistManager manager, PlaylistModel playlist) {
     showDialog(
       context: context,

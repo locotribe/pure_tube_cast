@@ -21,10 +21,46 @@ class _PlaylistPageState extends State<PlaylistPage> {
   bool _isSelectionMode = false;
   final Set<String> _selectedIds = {};
 
+  // 【追加】初期スクロール完了フラグ
+  bool _hasInitialScrolled = false;
+
   @override
   void dispose() {
     _scrollController.dispose();
     super.dispose();
+  }
+
+  // 【追加】再生中のアイテムへスクロールする処理
+  void _scrollToPlayingItem(List<LocalPlaylistItem> items) {
+    if (_hasInitialScrolled) return;
+
+    // 再生中のアイテムのインデックスを探す
+    final playingIndex = items.indexWhere((item) => item.isPlaying);
+
+    if (playingIndex != -1) {
+      // レイアウト描画後に実行
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollController.hasClients) {
+          // 1アイテムの高さの概算 (Card+Margin) = 約90.0px と仮定
+          const double itemHeight = 90.0;
+          final double screenHeight = _scrollController.position.viewportDimension;
+
+          // 再生中のアイテムが画面中央に来るようなオフセットを計算
+          // (アイテムの位置) - (画面の半分) + (アイテムの半分の高さ)
+          double targetOffset = (playingIndex * itemHeight) - (screenHeight / 2) + (itemHeight / 2);
+
+          // 範囲外に行かないよう調整 (ScrollControllerのclampと同等の処理)
+          if (targetOffset < 0) targetOffset = 0;
+          if (targetOffset > _scrollController.position.maxScrollExtent) {
+            targetOffset = _scrollController.position.maxScrollExtent;
+          }
+
+          _scrollController.jumpTo(targetOffset);
+        }
+      });
+    }
+    // 一度実行したらフラグを立てて、以降は自動スクロールしない
+    _hasInitialScrolled = true;
   }
 
   void _toggleSelectionMode() {
@@ -91,6 +127,11 @@ class _PlaylistPageState extends State<PlaylistPage> {
             }
 
             final items = targetList.items;
+
+            // 【追加】データが読み込まれたら一度だけ自動スクロールを試みる
+            if (!_hasInitialScrolled && items.isNotEmpty) {
+              _scrollToPlayingItem(items);
+            }
 
             return Scaffold(
               appBar: AppBar(
@@ -232,8 +273,6 @@ class _PlaylistPageState extends State<PlaylistPage> {
               margin: const EdgeInsets.symmetric(vertical: 4),
               child: ListTile(
                 contentPadding: const EdgeInsets.all(8),
-
-                // サムネイルに再生中マークを重ねる
                 leading: SizedBox(
                   width: 80,
                   height: 45,
@@ -258,7 +297,6 @@ class _PlaylistPageState extends State<PlaylistPage> {
                     ],
                   ),
                 ),
-
                 title: Text(
                   item.title,
                   maxLines: 2,
@@ -268,23 +306,18 @@ class _PlaylistPageState extends State<PlaylistPage> {
                       color: isPlaying ? Colors.red : Colors.black
                   ),
                 ),
-
-                // ステータス表示（再生中はサムネイルでわかるため、ここは送信済み等の表示に専念）
                 subtitle: Row(
                   children: [
                     Text(item.durationStr, style: const TextStyle(fontSize: 12)),
                     const SizedBox(width: 12),
-
                     if (item.hasError) ...[
                       const Icon(Icons.error, size: 16, color: Colors.red),
                       const SizedBox(width: 4),
                       const Text("エラー", style: TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.bold)),
-
                     ] else if (item.isResolving) ...[
                       const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
                       const SizedBox(width: 6),
                       const Text("解析中...", style: TextStyle(color: Colors.orange, fontSize: 12)),
-
                     ] else if (item.isQueued) ...[
                       const Icon(Icons.check_circle, size: 16, color: Colors.green),
                       const SizedBox(width: 4),
@@ -355,7 +388,6 @@ class _PlaylistPageState extends State<PlaylistPage> {
             children: [
               TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("閉じる")),
               const SizedBox(width: 8),
-
               ElevatedButton.icon(
                 icon: const Icon(Icons.play_arrow),
                 label: const Text("再生"),
@@ -365,12 +397,9 @@ class _PlaylistPageState extends State<PlaylistPage> {
                     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('デバイスに接続してください')));
                     return;
                   }
-
                   final pid = widget.playlistId ?? _manager.currentPlaylists.first.id;
-
                   Navigator.pop(ctx);
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('連続再生を開始します')));
-
                   await _manager.playSequence(currentDevice, pid, index);
                 },
               ),
@@ -384,7 +413,6 @@ class _PlaylistPageState extends State<PlaylistPage> {
   void _showMoveToDialog(BuildContext context, LocalPlaylistItem item) {
     final playlists = _manager.currentPlaylists;
     final currentListId = widget.playlistId ?? (playlists.isNotEmpty ? playlists.first.id : null);
-
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -397,7 +425,6 @@ class _PlaylistPageState extends State<PlaylistPage> {
             itemBuilder: (context, index) {
               final list = playlists[index];
               final isCurrent = list.id == currentListId;
-
               return ListTile(
                 leading: Icon(Icons.folder, color: isCurrent ? Colors.grey : Colors.orange),
                 title: Text(
