@@ -26,9 +26,7 @@ class PlaylistManager {
 
   final YoutubeService _ytService = YoutubeService();
 
-  // 監視用タイマー
   Timer? _monitorTimer;
-  // 最後に再生を開始したインデックス (Kodiの0番目に対応するアプリ側のインデックス)
   int _sessionStartIndex = 0;
 
   List<PlaylistModel> get currentPlaylists => _playlists;
@@ -80,16 +78,11 @@ class PlaylistManager {
   // --- 監視システム ---
   void _startMonitor(DlnaDevice device, String playlistId) {
     _monitorTimer?.cancel();
-
-    // 3秒おきにKodiの状態を確認
     _monitorTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
       final status = await DlnaService().getPlayerStatus(device);
       if (status != null) {
         final int kodiPosition = status['position'];
-        // Kodiの0番目 = アプリの _sessionStartIndex 番目
-        // したがって、現在の再生動画 = _sessionStartIndex + kodiPosition
         final int currentAppIndex = _sessionStartIndex + kodiPosition;
-
         _syncPlayingStatus(playlistId, currentAppIndex);
       }
     });
@@ -104,9 +97,7 @@ class PlaylistManager {
 
     bool updated = false;
 
-    // 現在の状態と違えば更新
     if (!playlist.items[playingIndex].isPlaying) {
-      // 全ての再生中フラグをリセットし、対象のみONにする
       for (int i = 0; i < playlist.items.length; i++) {
         if (i == playingIndex) {
           _playlists[pIndex].items[i] = playlist.items[i].copyWith(isPlaying: true, isQueued: true);
@@ -121,12 +112,10 @@ class PlaylistManager {
 
     if (updated) {
       _notifyListeners();
-      // 再生位置が変わったので補充チェック
       _checkAndQueueNext(DlnaService().currentDevice!, playlistId, playingIndex);
     }
   }
 
-  // 自動補充ロジック
   bool _isQueueLoopRunning = false;
 
   void _checkAndQueueNext(DlnaDevice device, String playlistId, int currentIndex) async {
@@ -138,8 +127,6 @@ class PlaylistManager {
       if (pIndex == -1) return;
 
       final items = _playlists[pIndex].items;
-
-      // 現在の再生位置の次から5つ先までをチェック
       int lookAhead = 5;
 
       for (int i = 1; i <= lookAhead; i++) {
@@ -148,17 +135,12 @@ class PlaylistManager {
 
         final item = items[nextIndex];
 
-        // まだ送信しておらず、エラーでもない場合のみ処理
         if (!item.isQueued && !item.hasError) {
-          print("[Manager] Auto-replenish: ${item.title}");
-
-          // 解析と送信（リトライ付き）
           String? url = await ensureStreamUrl(playlistId, item.id);
           if (url != null) {
             try {
               await DlnaService().addToPlaylist(device, url, item.title, item.thumbnailUrl);
               _markAsQueued(playlistId, item.id);
-              // 連続送信を防ぐため少し待機
               await Future.delayed(const Duration(seconds: 2));
             } catch (e) {
               print("[Manager] Auto-replenish send failed: $e");
@@ -182,19 +164,15 @@ class PlaylistManager {
     }
   }
 
-  // --- 解析（リトライ機能付き） ---
   Future<String?> ensureStreamUrl(String playlistId, String itemId) async {
     final pIndex = _playlists.indexWhere((p) => p.id == playlistId);
     if (pIndex == -1) return null;
 
-    // アイテム検索
     final iIndex = _playlists[pIndex].items.indexWhere((i) => i.id == itemId);
     if (iIndex == -1) return null;
     var item = _playlists[pIndex].items[iIndex];
 
-    // 既にURLがあれば返す
     if (item.streamUrl != null && item.streamUrl!.isNotEmpty) {
-      // isResolvingフラグが残っていたら消す
       if (item.isResolving) {
         _playlists[pIndex].items[iIndex] = item.copyWith(isResolving: false);
         _notifyListeners();
@@ -202,11 +180,9 @@ class PlaylistManager {
       return item.streamUrl;
     }
 
-    // UI更新（解析中）
     _playlists[pIndex].items[iIndex] = item.copyWith(isResolving: true, hasError: false);
     _notifyListeners();
 
-    // リトライループ
     int retryCount = 0;
     const maxRetries = 3;
 
@@ -214,7 +190,6 @@ class PlaylistManager {
       try {
         final streamUrl = await _ytService.fetchStreamUrl(item.originalUrl);
         if (streamUrl != null) {
-          // 成功
           _playlists[pIndex].items[iIndex] = item.copyWith(
               streamUrl: streamUrl,
               isResolving: false,
@@ -227,46 +202,51 @@ class PlaylistManager {
       } catch (e) {
         print("[Manager] Resolve retry $retryCount failed: $e");
       }
-
       retryCount++;
-      await Future.delayed(const Duration(seconds: 2)); // 待機してリトライ
+      await Future.delayed(const Duration(seconds: 2));
     }
 
-    // 失敗
     _playlists[pIndex].items[iIndex] = item.copyWith(isResolving: false, hasError: true);
     _notifyListeners();
     return null;
   }
 
-  // --- 連続再生シーケンス（開始点） ---
+  // --- 連続再生シーケンス ---
   Future<void> playSequence(DlnaDevice device, String playlistId, int startIndex) async {
+    // 【修正】最初に全プレイリストの「再生中」「送信済」状態をリセットする
+    // これにより、以前再生していた他のフォルダの赤いマークなどを消去する
+    for (var playlist in _playlists) {
+      for (int i = 0; i < playlist.items.length; i++) {
+        if (playlist.items[i].isPlaying || playlist.items[i].isQueued) {
+          // メモリ上のデータを書き換え
+          playlist.items[i] = playlist.items[i].copyWith(isPlaying: false, isQueued: false);
+        }
+      }
+    }
+    // 変更を通知（UI更新）
+    _notifyListeners();
+
+    // ここから通常の再生処理
     final pIndex = _playlists.indexWhere((p) => p.id == playlistId);
     if (pIndex == -1) return;
 
     final playlist = _playlists[pIndex];
     if (playlist.items.isEmpty) return;
 
-    if (startIndex < 0) startIndex = 0;
-
-    // 【重要】セッション開始位置を記憶
-    _sessionStartIndex = startIndex;
-
-    // 1. リセット
-    for (int i = 0; i < playlist.items.length; i++) {
-      if (playlist.items[i].isPlaying || playlist.items[i].isQueued) {
-        _playlists[pIndex].items[i] = playlist.items[i].copyWith(isPlaying: false, isQueued: false);
-      }
+    if (startIndex < 0 || startIndex >= playlist.items.length) {
+      startIndex = 0;
     }
-    _saveToStorage();
 
-    // 2. 監視スタート
+    _sessionStartIndex = startIndex;
+    playlist.lastPlayedIndex = startIndex;
+    _saveToStorage(); // 履歴とクリアした状態を保存
+
     _startMonitor(device, playlistId);
 
     try {
       final dlnaService = DlnaService();
       await dlnaService.clearPlaylist(device);
 
-      // 3. 開始曲を再生
       final firstItem = playlist.items[startIndex];
       String? url = await ensureStreamUrl(playlistId, firstItem.id);
 
@@ -274,11 +254,9 @@ class PlaylistManager {
         await dlnaService.addToPlaylist(device, url, firstItem.title, firstItem.thumbnailUrl);
         await dlnaService.playFromPlaylist(device, 0);
 
-        // 即座にステータス反映 (監視のラグを埋める)
         _playlists[pIndex].items[startIndex] = firstItem.copyWith(isPlaying: true, isQueued: true);
         _notifyListeners();
 
-        // 4. 初回の補充
         _checkAndQueueNext(device, playlistId, startIndex);
       }
     } catch (e) {
@@ -286,7 +264,7 @@ class PlaylistManager {
     }
   }
 
-  // その他のメソッド（import, processAndAddなど）はそのまま
+  // その他のメソッドはそのまま
   Future<String?> importFromYoutubePlaylist(String url) async {
     try {
       final info = await _ytService.fetchPlaylistInfo(url);

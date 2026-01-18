@@ -13,7 +13,6 @@ class LibraryView extends StatelessWidget {
 
     return Stack(
       children: [
-        // デバイス接続状態を監視
         StreamBuilder<DlnaDevice?>(
           stream: dlnaService.connectedDeviceStream,
           initialData: dlnaService.currentDevice,
@@ -35,18 +34,15 @@ class LibraryView extends StatelessWidget {
                   itemCount: playlists.length,
                   itemBuilder: (context, index) {
                     final playlist = playlists[index];
-
-                    // 【追加】このフォルダの中に「再生中」の動画があるかチェック
                     final bool isPlaying = playlist.items.any((item) => item.isPlaying);
 
                     return Card(
-                      elevation: isPlaying ? 4 : 2, // 再生中は少し浮き上がらせる
+                      elevation: isPlaying ? 4 : 2,
                       margin: const EdgeInsets.symmetric(vertical: 6),
                       shape: isPlaying
                           ? RoundedRectangleBorder(side: const BorderSide(color: Colors.red, width: 1.5), borderRadius: BorderRadius.circular(12))
                           : null,
                       child: ListTile(
-                        // 【変更】フォルダアイコンのデザイン分岐
                         leading: SizedBox(
                           width: 48,
                           height: 48,
@@ -77,7 +73,6 @@ class LibraryView extends StatelessWidget {
                           playlist.name,
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
-                            // 再生中はタイトルも赤く
                             color: isPlaying ? Colors.red : Colors.black,
                           ),
                         ),
@@ -95,17 +90,26 @@ class LibraryView extends StatelessWidget {
                           children: [
                             IconButton(
                               icon: const Icon(Icons.play_circle_fill, color: Colors.red, size: 32),
-                              tooltip: "続きから再生 (または最初から)",
+                              tooltip: "再生",
                               onPressed: (currentDevice != null && playlist.items.isNotEmpty)
                                   ? () {
-                                manager.playSequence(
-                                    currentDevice,
-                                    playlist.id,
-                                    playlist.lastPlayedIndex
-                                );
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text("「${playlist.name}」を再生します"))
-                                );
+                                // 【修正】履歴を確認して分岐
+                                final lastIndex = playlist.lastPlayedIndex;
+
+                                // 途中まで再生していた履歴がある場合は確認ダイアログ
+                                if (lastIndex > 0 && lastIndex < playlist.items.length) {
+                                  _showResumeDialog(context, manager, currentDevice, playlist);
+                                } else {
+                                  // 履歴がない(0)なら最初から
+                                  manager.playSequence(
+                                      currentDevice,
+                                      playlist.id,
+                                      0
+                                  );
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text("「${playlist.name}」を再生します"))
+                                  );
+                                }
                               }
                                   : null,
                             ),
@@ -150,6 +154,52 @@ class LibraryView extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+
+  // 【追加】再開確認ダイアログ
+  void _showResumeDialog(BuildContext context, PlaylistManager manager, DlnaDevice device, PlaylistModel playlist) {
+    // 再開する曲のタイトルを取得
+    final lastItemTitle = playlist.items[playlist.lastPlayedIndex].title;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("再生オプション"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("前回の続きから再生しますか？"),
+            const SizedBox(height: 8),
+            Text("対象: $lastItemTitle", style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context), // キャンセル
+            child: const Text("キャンセル"),
+          ),
+          TextButton(
+            onPressed: () {
+              // 最初から再生
+              manager.playSequence(device, playlist.id, 0);
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("最初から再生します")));
+            },
+            child: const Text("最初から"),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              // 続きから再生
+              manager.playSequence(device, playlist.id, playlist.lastPlayedIndex);
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("続きから再生します")));
+            },
+            child: const Text("続きから"),
+          ),
+        ],
+      ),
     );
   }
 
