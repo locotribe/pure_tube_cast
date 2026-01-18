@@ -29,14 +29,21 @@ class LibraryView extends StatelessWidget {
                   return const Center(child: Text("プレイリストがありません"));
                 }
 
-                return ListView.builder(
+                // 【変更】ListView -> ReorderableListView
+                return ReorderableListView.builder(
                   padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
                   itemCount: playlists.length,
+                  // 並べ替え時の処理
+                  onReorder: (oldIndex, newIndex) {
+                    manager.reorderPlaylists(oldIndex, newIndex);
+                  },
                   itemBuilder: (context, index) {
                     final playlist = playlists[index];
                     final bool isPlaying = playlist.items.any((item) => item.isPlaying);
 
                     return Card(
+                      // 【必須】並べ替えには一意なKeyが必要です
+                      key: ValueKey(playlist.id),
                       elevation: isPlaying ? 4 : 2,
                       margin: const EdgeInsets.symmetric(vertical: 6),
                       shape: isPlaying
@@ -93,14 +100,10 @@ class LibraryView extends StatelessWidget {
                               tooltip: "再生",
                               onPressed: (currentDevice != null && playlist.items.isNotEmpty)
                                   ? () {
-                                // 【修正】履歴を確認して分岐
                                 final lastIndex = playlist.lastPlayedIndex;
-
-                                // 途中まで再生していた履歴がある場合は確認ダイアログ
                                 if (lastIndex > 0 && lastIndex < playlist.items.length) {
                                   _showResumeDialog(context, manager, currentDevice, playlist);
                                 } else {
-                                  // 履歴がない(0)なら最初から
                                   manager.playSequence(
                                       currentDevice,
                                       playlist.id,
@@ -157,11 +160,9 @@ class LibraryView extends StatelessWidget {
     );
   }
 
-  // 【追加】再開確認ダイアログ
+  // ... (以下、_showResumeDialogなどのダイアログメソッドは変更なし、そのまま残してください) ...
   void _showResumeDialog(BuildContext context, PlaylistManager manager, DlnaDevice device, PlaylistModel playlist) {
-    // 再開する曲のタイトルを取得
     final lastItemTitle = playlist.items[playlist.lastPlayedIndex].title;
-
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -177,12 +178,11 @@ class LibraryView extends StatelessWidget {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context), // キャンセル
+            onPressed: () => Navigator.pop(context),
             child: const Text("キャンセル"),
           ),
           TextButton(
             onPressed: () {
-              // 最初から再生
               manager.playSequence(device, playlist.id, 0);
               Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("最初から再生します")));
@@ -191,7 +191,6 @@ class LibraryView extends StatelessWidget {
           ),
           ElevatedButton(
             onPressed: () {
-              // 続きから再生
               manager.playSequence(device, playlist.id, playlist.lastPlayedIndex);
               Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("続きから再生します")));

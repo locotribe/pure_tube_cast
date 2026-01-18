@@ -343,6 +343,15 @@ class PlaylistManager {
     }
   }
 
+  // --- 【追加】プレイリスト自体の並べ替え ---
+  void reorderPlaylists(int oldIndex, int newIndex) {
+    if (oldIndex < newIndex) newIndex -= 1;
+    final playlist = _playlists.removeAt(oldIndex);
+    _playlists.insert(newIndex, playlist);
+    _saveToStorage();
+    _notifyListeners();
+  }
+
   // --- 並べ替え (Kodi同期対応) ---
   void reorder(int oldIndex, int newIndex, {String? playlistId}) {
     final pIndex = (playlistId == null)
