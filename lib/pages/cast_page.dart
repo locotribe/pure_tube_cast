@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // MethodChannel用
 import 'package:url_launcher/url_launcher.dart';
 
 import '../managers/playlist_manager.dart';
 import '../services/dlna_service.dart';
-import '../services/video_resolver.dart'; // YoutubeServiceの代わりにインポート
-import '../main.dart'; // DeviceListPageへのアクセス用
+import '../services/video_resolver.dart';
+import 'playlist_page.dart';
 
 class CastPage extends StatefulWidget {
   final String? initialUrl;
@@ -16,12 +17,12 @@ class CastPage extends StatefulWidget {
 }
 
 class _CastPageState extends State<CastPage> {
-  // VideoResolverを使用
   final VideoResolver _resolver = VideoResolver();
-
-  // シングルトンサービス
   final DlnaService _dlnaService = DlnaService();
   final PlaylistManager _playlistManager = PlaylistManager();
+
+  // Androidネイティブ連携用チャンネル
+  static const platform = MethodChannel('com.example.pure_tube_cast/app_control');
 
   String _statusMessage = "読み込み中...";
   Map<String, dynamic>? _videoMetadata;
@@ -47,12 +48,10 @@ class _CastPageState extends State<CastPage> {
       });
     }
 
-    // URL抽出（テキストに混ざっている場合）
     final match = RegExp(r'(https?://\S+)').firstMatch(url);
     final targetUrl = match?.group(0) ?? url;
 
     try {
-      // Resolverを使ってメタデータ取得
       final metadata = await _resolver.resolveMetadata(targetUrl);
 
       if (mounted) {
@@ -77,49 +76,11 @@ class _CastPageState extends State<CastPage> {
     }
   }
 
-  // 今すぐ再生
-  void _playNow() async {
-    if (_videoMetadata == null) return;
-    final currentDevice = _dlnaService.currentDevice;
-
-    if (currentDevice == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("デバイスに接続されていません。ホーム画面から接続してください。"))
-      );
-      return;
-    }
-
-    setState(() => _isLoading = true);
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('再生準備中...')));
-
-    try {
-      // Resolverを使ってストリームURL取得
-      final streamUrl = await _resolver.resolveStreamUrl(_videoMetadata!);
-
-      if (streamUrl == null) {
-        throw Exception("再生可能な動画リンクが見つかりませんでした");
-      }
-
-      await _dlnaService.playNow(
-          currentDevice,
-          streamUrl,
-          _videoMetadata!['title'],
-          _videoMetadata!['thumbnailUrl']
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("再生失敗: $e"), backgroundColor: Colors.red));
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  // リストに追加
-  void _addToList() {
+  // 1. リストに追加して続ける (YouTubeに戻る: 最小化)
+  void _addAndContinue() async {
     if (_videoMetadata == null) return;
 
-    // 現在のデバイス（nullならオフライン追加）を渡す
-    // ※ PlaylistManager側も修正が必要（後述の補足参照）ですが、
-    // Web動画の場合は非同期解析が難しいため、現時点では「メタデータのみ保存」となります。
+    // リストに追加
     _playlistManager.processAndAdd(
         _dlnaService,
         _videoMetadata!,
@@ -127,9 +88,84 @@ class _CastPageState extends State<CastPage> {
     );
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('リストに追加しました')),
+      const SnackBar(content: Text("リストに追加しました")),
     );
-    Navigator.pop(context);
+
+    // 【変更】アプリを最小化して、裏にあるYouTubeを表示させる
+    try {
+      await platform.invokeMethod('moveTaskToBack');
+    } catch (e) {
+      print("[CastPage] Failed to minimize app: $e");
+      // 失敗時のフォールバックとして従来のlaunchUrlを使う手もあるが、
+      // 基本的にAndroidなら成功するのでエラーログのみ
+    }
+
+    // 万が一戻ってきたときのために画面を閉じておく
+    if (mounted) Navigator.pop(context);
+  }
+
+  // 2. リストに追加して確認 (リスト画面へ)
+  void _addAndCheck() {
+    if (_videoMetadata == null) return;
+
+    _playlistManager.processAndAdd(
+        _dlnaService,
+        _videoMetadata!,
+        device: _dlnaService.currentDevice
+    );
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("リストに追加しました")),
+    );
+
+    if (mounted) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const PlaylistPage()),
+      );
+    }
+  }
+
+  // 3. リストに追加して今すぐ再生
+  Future<void> _addAndPlayNow() async {
+    if (_videoMetadata == null) return;
+
+    final currentDevice = _dlnaService.currentDevice;
+    if (currentDevice == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("デバイスに接続されていません"))
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      await _playlistManager.processAndAdd(
+          _dlnaService,
+          _videoMetadata!,
+          device: currentDevice
+      );
+
+      final index = _playlistManager.currentItems.length - 1;
+      await _dlnaService.playFromPlaylist(currentDevice, index);
+
+    } catch (e) {
+      print("[CastPage] Play Now Error: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("再生エラー: $e")),
+        );
+      }
+    }
+
+    if (mounted) {
+      setState(() => _isLoading = false);
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const PlaylistPage()),
+      );
+    }
   }
 
   void _openInBrowser() async {
@@ -148,14 +184,13 @@ class _CastPageState extends State<CastPage> {
       children: [
         Scaffold(
           appBar: AppBar(
-            title: const Text("動画確認"),
-            leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.pop(context)),
+            title: const Text("カートに追加"),
+            leading: IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
           ),
           body: SingleChildScrollView(
             padding: const EdgeInsets.all(16.0),
             child: Column(
               children: [
-                // サムネイル表示
                 Container(
                   width: double.infinity,
                   decoration: BoxDecoration(
@@ -181,7 +216,7 @@ class _CastPageState extends State<CastPage> {
                       else
                         const Padding(
                           padding: EdgeInsets.all(40),
-                          child: Icon(Icons.public, size: 60, color: Colors.blueGrey),
+                          child: Icon(Icons.playlist_add_check, size: 60, color: Colors.blueGrey),
                         ),
 
                       Padding(
@@ -197,68 +232,74 @@ class _CastPageState extends State<CastPage> {
                             ),
                             const SizedBox(height: 5),
                             Text(_statusMessage, style: const TextStyle(color: Colors.grey)),
-                            if (_videoMetadata != null && _videoMetadata!['streamUrl'] == null && _videoMetadata!['isDirectFile'] != true && !_resolver.resolveStreamUrl(_videoMetadata!).toString().contains('Future'))
-                            // 注: Webサイト解析で動画URLが見つからなかった場合の警告表示
-                            // (実際にはFutureの結果を待つ必要があるため、ここでは簡易的なメッセージのみ)
-                              const Padding(
-                                padding: EdgeInsets.only(top:8.0),
-                                child: Text("※このサイトの動画は自動解析できない可能性があります", style: TextStyle(color: Colors.orange, fontSize: 12)),
-                              ),
                           ],
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 30),
 
                 if (_videoMetadata != null) ...[
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _playNow,
-                          icon: const Icon(Icons.play_arrow, size: 28),
-                          label: const Text("今すぐ再生", style: TextStyle(fontSize: 16)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.red,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            elevation: 3,
-                          ),
-                        ),
+                  // A: 続ける (最小化)
+                  SizedBox(
+                    width: double.infinity,
+                    height: 55,
+                    child: ElevatedButton.icon(
+                      onPressed: _addAndContinue,
+                      icon: const Icon(Icons.reply, size: 26),
+                      label: const Text("リストに追加して 続ける", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue,
+                        foregroundColor: Colors.white,
+                        elevation: 4,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
-                      const SizedBox(width: 15),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _addToList,
-                          icon: const Icon(Icons.playlist_add, size: 28),
-                          label: const Text("リストに追加", style: TextStyle(fontSize: 16)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.blue,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            elevation: 3,
-                          ),
-                        ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // B: 確認
+                  SizedBox(
+                    width: double.infinity,
+                    height: 55,
+                    child: OutlinedButton.icon(
+                      onPressed: _addAndCheck,
+                      icon: const Icon(Icons.playlist_play, size: 26),
+                      label: const Text("リストに追加して 確認", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.blue, width: 2),
+                        foregroundColor: Colors.blue,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
-                    ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // C: 今すぐ再生
+                  SizedBox(
+                    width: double.infinity,
+                    height: 55,
+                    child: ElevatedButton.icon(
+                      onPressed: _addAndPlayNow,
+                      icon: const Icon(Icons.play_arrow, size: 26),
+                      label: const Text("リストに追加して 今すぐ再生", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                        elevation: 4,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
                   ),
                 ],
 
-                const SizedBox(height: 40),
-
-                // ブラウザで開くボタン
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: _openInBrowser,
-                    label: const Text("ブラウザで開く"),
-                    icon: const Icon(Icons.open_in_new),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                    ),
-                  ),
+                const SizedBox(height: 30),
+                TextButton.icon(
+                  onPressed: _openInBrowser,
+                  icon: const Icon(Icons.open_in_new, size: 16),
+                  label: const Text("ブラウザで開く"),
+                  style: TextButton.styleFrom(foregroundColor: Colors.grey),
                 ),
               ],
             ),
@@ -275,7 +316,7 @@ class _CastPageState extends State<CastPage> {
                   CircularProgressIndicator(color: Colors.white),
                   SizedBox(height: 20),
                   Text(
-                    "解析中...",
+                    "処理中...",
                     style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                 ],

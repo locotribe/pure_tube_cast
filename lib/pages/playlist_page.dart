@@ -227,6 +227,28 @@ class _PlaylistPageState extends State<PlaylistPage> {
                       padding: const EdgeInsets.only(right: 20),
                       child: const Icon(Icons.delete, color: Colors.white),
                     ),
+                    // 【追加】削除前の確認ダイアログ
+                    confirmDismiss: (direction) async {
+                      return await showDialog(
+                        context: context,
+                        builder: (BuildContext context) {
+                          return AlertDialog(
+                            title: const Text("確認"),
+                            content: Text("「${item.title}」\nを削除しますか？"),
+                            actions: <Widget>[
+                              TextButton(
+                                onPressed: () => Navigator.of(context).pop(false),
+                                child: const Text("キャンセル"),
+                              ),
+                              TextButton(
+                                onPressed: () => Navigator.of(context).pop(true),
+                                child: const Text("削除", style: TextStyle(color: Colors.red)),
+                              ),
+                            ],
+                          );
+                        },
+                      );
+                    },
                     onDismissed: (direction) {
                       _manager.removeItem(index);
                       if (isConnected && currentDevice != null) {
@@ -239,6 +261,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                       );
                     },
                     child: Card(
+                      // ... (Cardの中身は変更なし)
                       key: ValueKey(item.id),
                       elevation: 2,
                       margin: const EdgeInsets.symmetric(vertical: 4),
@@ -289,7 +312,6 @@ class _PlaylistPageState extends State<PlaylistPage> {
                             ? const Text("エラー", style: TextStyle(color: Colors.red, fontSize: 12))
                             : null,
                         onTap: () {
-                          // ログ追加
                           print("[UI] Playlist item tapped: ${item.title} (ID: ${item.id})");
                           _showDetailDialog(context, item, index, isConnected, currentDevice);
                         },
