@@ -43,6 +43,25 @@ class DlnaDevice {
   }
 }
 
+// Kodiからのアイテム受取用クラス
+class KodiPlaylistItem {
+  final String label;
+  final String file;
+  KodiPlaylistItem({required this.label, required this.file});
+
+  factory KodiPlaylistItem.fromJson(Map<String, dynamic> json) {
+    // titleを優先して取得
+    String name = json['title'] ?? '';
+    if (name.isEmpty) {
+      name = json['label'] ?? '';
+    }
+    return KodiPlaylistItem(
+      label: name,
+      file: json['file'] ?? '',
+    );
+  }
+}
+
 class DlnaService {
   static final DlnaService _instance = DlnaService._internal();
   factory DlnaService() => _instance;
@@ -323,11 +342,12 @@ class DlnaService {
   // Kodi プレイリスト操作
   // ====================================================================
 
-  /// 1. 今すぐ再生
+  /// 1. 今すぐ再生 (修正：安全な形式に戻す)
   Future<void> playNow(DlnaDevice device, String videoUrl, String title, String? thumbnailUrl) async {
     print("[DlnaService] playNow called: $title");
     try {
       await _sendJsonRpc(device, "Playlist.Clear", {"playlistid": 1});
+      // itemにはfileのみ渡す
       await _sendJsonRpc(device, "Playlist.Add", {
         "playlistid": 1,
         "item": {"file": videoUrl}
@@ -341,7 +361,7 @@ class DlnaService {
     }
   }
 
-  /// 2. 末尾に追加
+  /// 2. 末尾に追加 (修正：安全な形式に戻す)
   Future<void> addToPlaylist(DlnaDevice device, String videoUrl, String title, String? thumbnailUrl) async {
     try {
       await _sendJsonRpc(device, "Playlist.Add", {
@@ -354,7 +374,7 @@ class DlnaService {
     }
   }
 
-  /// 【追加】指定位置に挿入
+  /// 指定位置に挿入 (修正：安全な形式に戻す)
   Future<void> insertToPlaylist(DlnaDevice device, int position, String videoUrl, String title, String? thumbnailUrl) async {
     try {
       await _sendJsonRpc(device, "Playlist.Insert", {
@@ -364,8 +384,6 @@ class DlnaService {
       });
     } catch (e) {
       print("[DlnaService] insertToPlaylist failed: $e");
-      // Insertが失敗した場合(古いKodi等)、AddしてMoveする代替手段も考えられるが、
-      // 基本的にInsertはサポートされている前提
       throw Exception("挿入に失敗しました");
     }
   }
@@ -408,7 +426,7 @@ class DlnaService {
     }
   }
 
-  /// 現在再生中の状態を取得
+  /// 現在再生中の状態を取得 (監視用)
   Future<Map<String, dynamic>?> getPlayerStatus(DlnaDevice device) async {
     try {
       final props = await _sendJsonRpc(device, "Player.GetProperties", {
@@ -422,13 +440,49 @@ class DlnaService {
       });
 
       if (props != null && item != null && item['item'] != null) {
+        String name = item['item']['title'] ?? '';
+        if (name.isEmpty) {
+          name = item['item']['label'] ?? '';
+        }
+
+        // 【追加】再生時間を秒数に変換
+        int totalSeconds = 0;
+        if (props['totaltime'] != null) {
+          final t = props['totaltime'];
+          int h = t['hours'] ?? 0;
+          int m = t['minutes'] ?? 0;
+          int s = t['seconds'] ?? 0;
+          totalSeconds = (h * 3600) + (m * 60) + s;
+        }
+
         return {
           'position': props['position'] ?? 0,
-          'title': item['item']['label'] ?? item['item']['title'] ?? '',
+          'title': name,
+          'totalSeconds': totalSeconds, // 秒数を返す
         };
       }
     } catch (e) { }
     return null;
+  }
+
+  /// プレイリスト全件取得（リカバリー用）
+  Future<List<KodiPlaylistItem>> getPlaylistItems(DlnaDevice device) async {
+    try {
+      final result = await _sendJsonRpc(device, "Playlist.GetItems", {
+        "playlistid": 1,
+        "properties": ["title", "file"],
+        "limits": {"start": 0, "end": 100}
+      });
+
+      if (result != null && result['items'] != null) {
+        return (result['items'] as List)
+            .map((e) => KodiPlaylistItem.fromJson(e))
+            .toList();
+      }
+    } catch (e) {
+      print("[DlnaService] getPlaylistItems failed: $e");
+    }
+    return [];
   }
 
   // --- 共通 JSON-RPC ---
