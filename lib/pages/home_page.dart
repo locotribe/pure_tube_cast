@@ -7,6 +7,7 @@ import 'playlist_page.dart';
 import 'cast_page.dart'; // CastPageへのアクセス
 import '../managers/site_manager.dart';
 import '../models/site_model.dart';
+import 'playlists_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -196,7 +197,13 @@ class _HomePageState extends State<HomePage> {
                   icon: Icons.playlist_play,
                   label: "リスト",
                   color: Colors.orange,
-                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PlaylistPage())),
+                  onTap: () {
+                    // 【変更】ライブラリ画面へ遷移
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const PlaylistsPage()),
+                    );
+                  },
                 ),
                 const SizedBox(width: 16),
               ],
