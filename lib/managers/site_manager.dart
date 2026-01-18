@@ -19,24 +19,39 @@ class SiteManager {
 
   // --- 操作ロジック ---
 
-  // サイトを追加
-  void addSite(String name, String url) {
+  // 【変更】iconUrl引数を追加
+  void addSite(String name, String url, {String? iconUrl}) {
     final newSite = SiteModel(
-      id: DateTime.now().millisecondsSinceEpoch.toString(), // 簡易ID
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
       name: name,
       url: url,
+      iconUrl: iconUrl,
     );
     _sites.add(newSite);
     _notifyAndSave();
   }
 
-  // サイトを削除
+  // 【追加】サイト情報の更新（編集用）
+  void updateSite(String id, String newName, String newUrl, {String? newIconUrl}) {
+    final index = _sites.indexWhere((s) => s.id == id);
+    if (index != -1) {
+      // 既存のアイコンURLを維持するか、新しいもので上書きするか
+      final oldIcon = _sites[index].iconUrl;
+      _sites[index] = SiteModel(
+        id: id,
+        name: newName,
+        url: newUrl,
+        iconUrl: newIconUrl ?? oldIcon,
+      );
+      _notifyAndSave();
+    }
+  }
+
   void removeSite(String id) {
     _sites.removeWhere((site) => site.id == id);
     _notifyAndSave();
   }
 
-  // 変更を通知して保存
   void _notifyAndSave() {
     _streamController.add(List.from(_sites));
     _saveToStorage();

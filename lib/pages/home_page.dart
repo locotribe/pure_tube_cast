@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
-import 'package:http/http.dart' as http; // 追加
-import 'package:html/parser.dart' as parser; // 追加
+import 'package:http/http.dart' as http;
+import 'package:html/parser.dart' as parser;
 
 import '../views/device_view.dart';
 import '../views/web_video_view.dart';
@@ -18,9 +18,7 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  // タブの選択インデックス (0:動画サイト, 1:ライブラリ, 2:接続)
   int _selectedIndex = 0;
-
   StreamSubscription? _intentStreamSubscription;
   final SiteManager _siteManager = SiteManager();
 
@@ -36,7 +34,6 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
-  // --- 共有受け取りロジック ---
   void _setupSharingListener() {
     _intentStreamSubscription = ReceiveSharingIntent.instance.getMediaStream().listen(
           (List<SharedMediaFile> value) {
@@ -50,16 +47,11 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  // 【改修】共有されたテキスト(URL)の処理分岐
   void _handleSharedText(String sharedText) {
     if (!mounted) return;
-
-    // URL共有時にアクションを選択させる
     showModalBottomSheet(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (context) {
         return SafeArea(
           child: Column(
@@ -75,17 +67,17 @@ class _HomePageState extends State<HomePage> {
                 title: const Text("動画として解析"),
                 subtitle: const Text("動画リストに追加します"),
                 onTap: () {
-                  Navigator.pop(context); // シートを閉じる
+                  Navigator.pop(context);
                   _navigateToCastPage(sharedText);
                 },
               ),
               ListTile(
                 leading: const Icon(Icons.public, color: Colors.blue, size: 32),
                 title: const Text("Webサイトとして登録"),
-                subtitle: const Text("タイトルを取得してブックマークします"),
+                subtitle: const Text("タイトルとアイコンを取得して登録します"),
                 onTap: () {
-                  Navigator.pop(context); // シートを閉じる
-                  _fetchTitleAndShowAddDialog(sharedText);
+                  Navigator.pop(context);
+                  _fetchInfoAndShowAddDialog(sharedText); // 【変更】メソッド名変更
                 },
               ),
               const SizedBox(height: 8),
@@ -96,19 +88,15 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // 1. 動画として解析（従来通りのフロー）
   void _navigateToCastPage(String url) {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (context) => CastPage(initialUrl: url),
-      ),
+      MaterialPageRoute(builder: (context) => CastPage(initialUrl: url)),
     );
   }
 
-  // 2. タイトルを取得してサイト登録ダイアログを表示
-  Future<void> _fetchTitleAndShowAddDialog(String url) async {
-    // ローディング表示
+  // 【改修】タイトルとアイコンを取得
+  Future<void> _fetchInfoAndShowAddDialog(String url) async {
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -116,27 +104,44 @@ class _HomePageState extends State<HomePage> {
     );
 
     String title = "";
+    String? iconUrl;
+
     try {
-      // ページのHTMLを取得してタイトル抽出
-      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+      final uri = Uri.parse(url);
+      final response = await http.get(uri).timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         final document = parser.parse(response.body);
         title = document.querySelector('title')?.text ?? "";
+
+        // アイコン(favicon)の抽出
+        // 1. <link rel="icon">
+        var iconLink = document.querySelector('link[rel="icon"]')?.attributes['href'];
+        // 2. <link rel="shortcut icon">
+        iconLink ??= document.querySelector('link[rel="shortcut icon"]')?.attributes['href'];
+        // 3. <link rel="apple-touch-icon"> (スマホ向け)
+        iconLink ??= document.querySelector('link[rel="apple-touch-icon"]')?.attributes['href'];
+
+        if (iconLink != null && iconLink.isNotEmpty) {
+          // 相対パスを絶対パスに変換
+          iconUrl = uri.resolve(iconLink).toString();
+        } else {
+          // 見つからない場合はルートのfavicon.icoを試す
+          iconUrl = uri.resolve('/favicon.ico').toString();
+        }
       }
     } catch (e) {
-      print("[HomePage] Title fetch error: $e");
+      print("[HomePage] Fetch error: $e");
     }
 
     if (!mounted) return;
     Navigator.pop(context); // ローディングを閉じる
 
-    // 取得した情報でダイアログを開く
-    _showAddSiteDialog(initialName: title, initialUrl: url);
+    // ダイアログ表示
+    _showAddSiteDialog(initialName: title, initialUrl: url, initialIconUrl: iconUrl);
   }
 
-  // --- サイト追加ダイアログ ---
-  // 【改修】初期値を受け取れるように変更
-  void _showAddSiteDialog({String? initialName, String? initialUrl}) {
+  // 【改修】iconUrlを受け取り、保存するように変更
+  void _showAddSiteDialog({String? initialName, String? initialUrl, String? initialIconUrl}) {
     final nameController = TextEditingController(text: initialName);
     final urlController = TextEditingController(text: initialUrl);
 
@@ -148,52 +153,39 @@ class _HomePageState extends State<HomePage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (initialIconUrl != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: Image.network(initialIconUrl, width: 48, height: 48, errorBuilder: (_,__,___) => const SizedBox()),
+                ),
               TextField(
                 controller: nameController,
-                decoration: const InputDecoration(
-                  labelText: "サイト名 (例: Vimeo)",
-                  border: OutlineInputBorder(),
-                  hintText: "サイト名を入力",
-                ),
+                decoration: const InputDecoration(labelText: "サイト名", border: OutlineInputBorder(), hintText: "サイト名を入力"),
               ),
               const SizedBox(height: 10),
               TextField(
                 controller: urlController,
-                decoration: const InputDecoration(
-                  labelText: "URL (例: https://...)",
-                  border: OutlineInputBorder(),
-                ),
+                decoration: const InputDecoration(labelText: "URL", border: OutlineInputBorder()),
                 keyboardType: TextInputType.url,
-                maxLines: 3, // URLが長い場合に見やすくする
+                maxLines: 3,
                 minLines: 1,
               ),
             ],
           ),
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("キャンセル"),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("キャンセル")),
           ElevatedButton(
             onPressed: () {
               final name = nameController.text.trim();
               final url = urlController.text.trim();
               if (name.isNotEmpty && url.isNotEmpty) {
-                _siteManager.addSite(name, url);
+                // iconUrlも渡す
+                _siteManager.addSite(name, url, iconUrl: initialIconUrl);
                 Navigator.pop(context);
 
-                // 登録完了のフィードバックと、タブ移動（もし別のタブにいたら）
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text("$name を追加しました")),
-                );
-
-                // 動画サイトタブへ移動して追加を確認しやすくする
-                if (_selectedIndex != 0) {
-                  setState(() {
-                    _selectedIndex = 0;
-                  });
-                }
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("$name を追加しました")));
+                if (_selectedIndex != 0) setState(() => _selectedIndex = 0);
               }
             },
             child: const Text("追加"),
@@ -214,15 +206,13 @@ class _HomePageState extends State<HomePage> {
             IconButton(
               icon: const Icon(Icons.add_link),
               tooltip: "サイトを追加",
-              onPressed: () => _showAddSiteDialog(), // 手動追加時は引数なし
+              onPressed: () => _showAddSiteDialog(),
             ),
         ],
       ),
       resizeToAvoidBottomInset: false,
-
       body: Column(
         children: [
-          // --- 上部カスタムタブバー ---
           Container(
             color: Theme.of(context).primaryColor.withOpacity(0.05),
             child: Row(
@@ -233,15 +223,13 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
           ),
-
-          // --- メインコンテンツ ---
           Expanded(
             child: IndexedStack(
               index: _selectedIndex,
               children: const [
-                WebVideoView(),  // index 0
-                LibraryView(),   // index 1
-                DeviceView(),    // index 2
+                WebVideoView(),
+                LibraryView(),
+                DeviceView(),
               ],
             ),
           ),
@@ -250,43 +238,16 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // タブボタンの構築
   Widget _buildTabItem(int index, IconData icon, String label) {
     final bool isSelected = _selectedIndex == index;
     final Color color = isSelected ? Colors.red : Colors.grey;
-
     return Expanded(
       child: InkWell(
-        onTap: () {
-          setState(() {
-            _selectedIndex = index;
-          });
-        },
+        onTap: () => setState(() => _selectedIndex = index),
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 12),
-          decoration: BoxDecoration(
-            border: Border(
-              bottom: BorderSide(
-                color: isSelected ? Colors.red : Colors.transparent,
-                width: 3,
-              ),
-            ),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, color: color),
-              const SizedBox(height: 4),
-              Text(
-                label,
-                style: TextStyle(
-                  color: color,
-                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                  fontSize: 12,
-                ),
-              ),
-            ],
-          ),
+          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: isSelected ? Colors.red : Colors.transparent, width: 3))),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: color), const SizedBox(height: 4), Text(label, style: TextStyle(color: color, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal, fontSize: 12))]),
         ),
       ),
     );
