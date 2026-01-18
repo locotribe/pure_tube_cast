@@ -16,8 +16,16 @@ class _PlaylistPageState extends State<PlaylistPage> {
   final DlnaService _dlnaService = DlnaService();
   final PlaylistManager _manager = PlaylistManager();
 
+  final ScrollController _scrollController = ScrollController();
+
   bool _isSelectionMode = false;
   final Set<String> _selectedIds = {};
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   void _toggleSelectionMode() {
     setState(() {
@@ -140,94 +148,140 @@ class _PlaylistPageState extends State<PlaylistPage> {
   }
 
   Widget _buildListBody(List<LocalPlaylistItem> items, bool isConnected, DlnaDevice? currentDevice) {
-    if (_isSelectionMode) {
-      return ListView.builder(
-        padding: const EdgeInsets.all(12),
-        itemCount: items.length,
-        itemBuilder: (context, index) {
-          final item = items[index];
-          final isSelected = _selectedIds.contains(item.id);
-          return Card(
-            color: isSelected ? Colors.blue.shade50 : null,
-            child: ListTile(
-              leading: Checkbox(value: isSelected, onChanged: (_) => _toggleItemSelection(item.id)),
-              title: Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-              onTap: () => _toggleItemSelection(item.id),
-            ),
-          );
-        },
-      );
-    }
+    // 共通のスクロールバー設定
+    const double scrollbarThickness = 12.0; // 太くして掴みやすく
+    const bool isScrollbarInteractive = true; // 【重要】これでドラッグ可能になります
 
-    return ReorderableListView.builder(
-      padding: const EdgeInsets.all(12),
-      itemCount: items.length,
-      onReorder: (oldIndex, newIndex) {
-        _manager.reorder(oldIndex, newIndex, playlistId: widget.playlistId);
-      },
-      itemBuilder: (context, index) {
-        final item = items[index];
-        return Dismissible(
-          key: ValueKey(item.id),
-          direction: DismissDirection.endToStart,
-          background: Container(
-            color: Colors.red,
-            alignment: Alignment.centerRight,
-            padding: const EdgeInsets.only(right: 20),
-            child: const Icon(Icons.delete, color: Colors.white),
-          ),
-          confirmDismiss: (direction) async {
-            return await showDialog(
-              context: context,
-              builder: (ctx) => AlertDialog(
-                title: const Text("確認"),
-                content: Text("「${item.title}」\nを削除しますか？"),
-                actions: [
-                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("キャンセル")),
-                  TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("削除", style: TextStyle(color: Colors.red))),
-                ],
+    if (_isSelectionMode) {
+      return Scrollbar(
+        controller: _scrollController,
+        thumbVisibility: true,
+        thickness: scrollbarThickness,
+        interactive: isScrollbarInteractive, // ドラッグ有効化
+        radius: const Radius.circular(8.0),
+        child: ListView.builder(
+          controller: _scrollController,
+          physics: const AlwaysScrollableScrollPhysics(), // リストが短くてもスクロール動作を可能に
+          padding: const EdgeInsets.all(12),
+          itemCount: items.length,
+          itemBuilder: (context, index) {
+            final item = items[index];
+            final isSelected = _selectedIds.contains(item.id);
+            return Card(
+              color: isSelected ? Colors.blue.shade50 : null,
+              child: ListTile(
+                leading: Checkbox(value: isSelected, onChanged: (_) => _toggleItemSelection(item.id)),
+                title: Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                onTap: () => _toggleItemSelection(item.id),
               ),
             );
           },
-          onDismissed: (direction) {
-            _manager.removeItem(index, playlistId: widget.playlistId);
-          },
-          child: Card(
+        ),
+      );
+    }
+
+    return Scrollbar(
+      controller: _scrollController,
+      thumbVisibility: true,
+      thickness: scrollbarThickness,
+      interactive: isScrollbarInteractive, // ドラッグ有効化
+      radius: const Radius.circular(8.0),
+      child: ReorderableListView.builder(
+        scrollController: _scrollController,
+        physics: const AlwaysScrollableScrollPhysics(), // リストが短くてもスクロール動作を可能に
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
+        itemCount: items.length,
+        onReorder: (oldIndex, newIndex) {
+          _manager.reorder(oldIndex, newIndex, playlistId: widget.playlistId);
+        },
+        itemBuilder: (context, index) {
+          final item = items[index];
+          final isPlaying = item.isPlaying;
+
+          return Dismissible(
             key: ValueKey(item.id),
-            elevation: 2,
-            margin: const EdgeInsets.symmetric(vertical: 4),
-            child: ListTile(
-              contentPadding: const EdgeInsets.all(8),
-              leading: SizedBox(
-                width: 80,
-                child: item.thumbnailUrl != null
-                    ? Image.network(item.thumbnailUrl!, fit: BoxFit.cover, errorBuilder: (_,__,___) => const Icon(Icons.movie))
-                    : const Icon(Icons.movie),
-              ),
-              title: Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-              subtitle: Row(
-                children: [
-                  if (item.hasError) ...[
-                    const Icon(Icons.error_outline, size: 16, color: Colors.red),
-                    const SizedBox(width: 4),
-                    const Text("取得エラー", style: TextStyle(color: Colors.red, fontSize: 12)),
-                  ] else if (item.isResolving) ...[
-                    const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
-                    const SizedBox(width: 8),
-                    const Text("解析中...", style: TextStyle(color: Colors.orange, fontSize: 12)),
-                  ] else ...[
-                    Text(item.durationStr),
-                  ],
-                ],
-              ),
-              onTap: () {
-                // index をしっかり渡す
-                _showDetailDialog(context, item, index, isConnected, currentDevice);
-              },
+            direction: DismissDirection.endToStart,
+            background: Container(
+              color: Colors.red,
+              alignment: Alignment.centerRight,
+              padding: const EdgeInsets.only(right: 20),
+              child: const Icon(Icons.delete, color: Colors.white),
             ),
-          ),
-        );
-      },
+            confirmDismiss: (direction) async {
+              return await showDialog(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text("確認"),
+                  content: Text("「${item.title}」\nを削除しますか？"),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("キャンセル")),
+                    TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("削除", style: TextStyle(color: Colors.red))),
+                  ],
+                ),
+              );
+            },
+            onDismissed: (direction) {
+              _manager.removeItem(index, playlistId: widget.playlistId);
+            },
+            child: Card(
+              key: ValueKey(item.id),
+              elevation: isPlaying ? 4 : 2,
+              color: isPlaying ? Colors.red.shade50 : null,
+              shape: isPlaying ? RoundedRectangleBorder(side: const BorderSide(color: Colors.red, width: 2), borderRadius: BorderRadius.circular(12)) : null,
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              child: ListTile(
+                contentPadding: const EdgeInsets.all(8),
+                leading: SizedBox(
+                  width: 80,
+                  child: item.thumbnailUrl != null
+                      ? Image.network(item.thumbnailUrl!, fit: BoxFit.cover, errorBuilder: (_,__,___) => const Icon(Icons.movie))
+                      : const Icon(Icons.movie),
+                ),
+                title: Text(
+                  item.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                      color: isPlaying ? Colors.red : Colors.black
+                  ),
+                ),
+                subtitle: Row(
+                  children: [
+                    Text(item.durationStr, style: const TextStyle(fontSize: 12)),
+                    const SizedBox(width: 12),
+
+                    if (item.isPlaying) ...[
+                      const Icon(Icons.play_circle, size: 16, color: Colors.red),
+                      const SizedBox(width: 4),
+                      const Text("再生中", style: TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.bold)),
+
+                    ] else if (item.hasError) ...[
+                      const Icon(Icons.error, size: 16, color: Colors.red),
+                      const SizedBox(width: 4),
+                      const Text("エラー", style: TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.bold)),
+
+                    ] else if (item.isResolving) ...[
+                      const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
+                      const SizedBox(width: 6),
+                      const Text("解析中...", style: TextStyle(color: Colors.orange, fontSize: 12)),
+
+                    ] else if (item.isQueued) ...[
+                      const Icon(Icons.check_circle, size: 16, color: Colors.green),
+                      const SizedBox(width: 4),
+                      const Text("送信済", style: TextStyle(color: Colors.green, fontSize: 12, fontWeight: FontWeight.bold)),
+                    ],
+                  ],
+                ),
+                onTap: () {
+                  _showDetailDialog(context, item, index, isConnected, currentDevice);
+                },
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -251,7 +305,6 @@ class _PlaylistPageState extends State<PlaylistPage> {
     );
   }
 
-  // indexを受け取るように修正
   void _showDetailDialog(BuildContext context, LocalPlaylistItem item, int index, bool isConnected, DlnaDevice? currentDevice) {
     showDialog(
       context: context,
@@ -300,7 +353,6 @@ class _PlaylistPageState extends State<PlaylistPage> {
                   Navigator.pop(ctx);
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('連続再生を開始します')));
 
-                  // index を使って連続再生
                   await _manager.playSequence(currentDevice, pid, index);
                 },
               ),

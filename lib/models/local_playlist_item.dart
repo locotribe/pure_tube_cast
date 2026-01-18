@@ -1,42 +1,52 @@
-import 'dart:math';
-
-// 再生リストのアイテム情報
 class LocalPlaylistItem {
   final String id;
   final String title;
   final String originalUrl;
-  final String? streamUrl;
   final String? thumbnailUrl;
   final String durationStr;
+  final String? streamUrl;
 
-  bool isResolving;
-  bool hasError;
+  // 状態フラグ
+  final bool isResolving; // 解析中
+  final bool hasError;    // エラー
+  final bool isQueued;    // 送信済み
+  final bool isPlaying;   // 【追加】再生中
 
   LocalPlaylistItem({
     String? id,
     required this.title,
     required this.originalUrl,
-    this.streamUrl,
     this.thumbnailUrl,
-    this.durationStr = "--:--",
+    required this.durationStr,
+    this.streamUrl,
     this.isResolving = false,
     this.hasError = false,
-  }) : id = id ?? DateTime.now().microsecondsSinceEpoch.toString() + Random().nextInt(1000).toString();
+    this.isQueued = false,
+    this.isPlaying = false, // 【追加】初期値false
+  }) : id = id ?? DateTime.now().millisecondsSinceEpoch.toString();
 
   LocalPlaylistItem copyWith({
+    String? title,
+    String? originalUrl,
+    String? thumbnailUrl,
+    String? durationStr,
     String? streamUrl,
     bool? isResolving,
     bool? hasError,
+    bool? isQueued,
+    bool? isPlaying, // 【追加】
   }) {
     return LocalPlaylistItem(
       id: id,
-      title: title,
-      originalUrl: originalUrl,
-      thumbnailUrl: thumbnailUrl,
-      durationStr: durationStr,
+      title: title ?? this.title,
+      originalUrl: originalUrl ?? this.originalUrl,
+      thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
+      durationStr: durationStr ?? this.durationStr,
       streamUrl: streamUrl ?? this.streamUrl,
       isResolving: isResolving ?? this.isResolving,
       hasError: hasError ?? this.hasError,
+      isQueued: isQueued ?? this.isQueued,
+      isPlaying: isPlaying ?? this.isPlaying, // 【追加】
     );
   }
 
@@ -45,11 +55,12 @@ class LocalPlaylistItem {
       'id': id,
       'title': title,
       'originalUrl': originalUrl,
-      'streamUrl': streamUrl,
       'thumbnailUrl': thumbnailUrl,
       'durationStr': durationStr,
-      'isResolving': false,
+      'streamUrl': streamUrl,
+      'isResolving': isResolving,
       'hasError': hasError,
+      // isQueued, isPlaying は一時的な状態なので保存しない
     };
   }
 
@@ -58,11 +69,13 @@ class LocalPlaylistItem {
       id: json['id'],
       title: json['title'],
       originalUrl: json['originalUrl'],
-      streamUrl: json['streamUrl'],
       thumbnailUrl: json['thumbnailUrl'],
       durationStr: json['durationStr'] ?? "--:--",
-      isResolving: false,
+      streamUrl: json['streamUrl'],
+      isResolving: json['isResolving'] ?? false,
       hasError: json['hasError'] ?? false,
+      isQueued: false,
+      isPlaying: false,
     );
   }
 }
