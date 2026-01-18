@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import '../managers/playlist_manager.dart';
 import '../services/dlna_service.dart';
-import 'connection_page.dart'; // 【変更】DeviceListPageの代わりにインポート
+import 'connection_page.dart';
 
 class PlaylistPage extends StatefulWidget {
-  final String? playlistId; // 表示するリストのID (nullならメイン)
+  final String? playlistId;
 
   const PlaylistPage({super.key, this.playlistId});
 
@@ -107,7 +107,6 @@ class _PlaylistPageState extends State<PlaylistPage> {
                       tooltip: isConnected ? "接続中: ${currentDevice?.name}" : "デバイス未接続",
                       onPressed: () => Navigator.push(
                         context,
-                        // 【変更】ConnectionPageへ遷移
                         MaterialPageRoute(builder: (context) => const ConnectionPage()),
                       ),
                     ),
@@ -165,11 +164,6 @@ class _PlaylistPageState extends State<PlaylistPage> {
       itemCount: items.length,
       onReorder: (oldIndex, newIndex) {
         _manager.reorder(oldIndex, newIndex, playlistId: widget.playlistId);
-        if (isConnected && currentDevice != null && widget.playlistId == null) {
-          try {
-            _dlnaService.movePlaylistItem(currentDevice, oldIndex, newIndex < oldIndex ? newIndex : newIndex - 1);
-          } catch (e) { print("[UI] Kodi reorder failed: $e"); }
-        }
       },
       itemBuilder: (context, index) {
         final item = items[index];
@@ -197,9 +191,6 @@ class _PlaylistPageState extends State<PlaylistPage> {
           },
           onDismissed: (direction) {
             _manager.removeItem(index, playlistId: widget.playlistId);
-            if (isConnected && currentDevice != null && widget.playlistId == null) {
-              try { _dlnaService.removeFromPlaylist(currentDevice, index); } catch (e) {}
-            }
           },
           child: Card(
             key: ValueKey(item.id),
@@ -214,8 +205,23 @@ class _PlaylistPageState extends State<PlaylistPage> {
                     : const Icon(Icons.movie),
               ),
               title: Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-              subtitle: Text(item.durationStr),
+              subtitle: Row(
+                children: [
+                  if (item.hasError) ...[
+                    const Icon(Icons.error_outline, size: 16, color: Colors.red),
+                    const SizedBox(width: 4),
+                    const Text("取得エラー", style: TextStyle(color: Colors.red, fontSize: 12)),
+                  ] else if (item.isResolving) ...[
+                    const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
+                    const SizedBox(width: 8),
+                    const Text("解析中...", style: TextStyle(color: Colors.orange, fontSize: 12)),
+                  ] else ...[
+                    Text(item.durationStr),
+                  ],
+                ],
+              ),
               onTap: () {
+                // index をしっかり渡す
                 _showDetailDialog(context, item, index, isConnected, currentDevice);
               },
             ),
@@ -245,9 +251,11 @@ class _PlaylistPageState extends State<PlaylistPage> {
     );
   }
 
+  // indexを受け取るように修正
   void _showDetailDialog(BuildContext context, LocalPlaylistItem item, int index, bool isConnected, DlnaDevice? currentDevice) {
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         contentPadding: EdgeInsets.zero,
         content: Column(
@@ -276,17 +284,24 @@ class _PlaylistPageState extends State<PlaylistPage> {
             children: [
               TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("閉じる")),
               const SizedBox(width: 8),
+
               ElevatedButton.icon(
                 icon: const Icon(Icons.play_arrow),
                 label: const Text("再生"),
                 style: ElevatedButton.styleFrom(backgroundColor: isConnected ? Colors.red : Colors.grey, foregroundColor: Colors.white),
                 onPressed: () async {
-                  if (isConnected && currentDevice != null && !item.isResolving && !item.hasError) {
-                    await _dlnaService.playFromPlaylist(currentDevice, index);
-                    Navigator.pop(ctx);
-                  } else if (!isConnected) {
+                  if (!isConnected || currentDevice == null) {
                     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('デバイスに接続してください')));
+                    return;
                   }
+
+                  final pid = widget.playlistId ?? _manager.currentPlaylists.first.id;
+
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('連続再生を開始します')));
+
+                  // index を使って連続再生
+                  await _manager.playSequence(currentDevice, pid, index);
                 },
               ),
             ],

@@ -6,8 +6,6 @@ import '../services/youtube_service.dart';
 import '../models/playlist_model.dart';
 import '../models/local_playlist_item.dart';
 
-// 他のファイルが import 'playlist_manager.dart' した時に
-// LocalPlaylistItem も使えるようにエクスポートしておく
 export '../models/playlist_model.dart';
 export '../models/local_playlist_item.dart';
 
@@ -19,35 +17,25 @@ class PlaylistManager {
     _loadFromStorage();
   }
 
-  // 複数リストを管理
   final List<PlaylistModel> _playlists = [];
-
-  // ライブラリ画面用ストリーム（リストの一覧）
   final StreamController<List<PlaylistModel>> _playlistsController = StreamController.broadcast();
   Stream<List<PlaylistModel>> get playlistsStream => _playlistsController.stream;
 
-  // 既存画面（PlaylistPage）互換用：現在アクティブなリストのアイテムを流す
   final StreamController<List<LocalPlaylistItem>> _itemsController = StreamController.broadcast();
   Stream<List<LocalPlaylistItem>> get itemsStream => _itemsController.stream;
 
   final YoutubeService _ytService = YoutubeService();
 
+  // バックグラウンド処理中かどうかのフラグ
+  bool _isresolvingLoopRunning = false;
+
   List<PlaylistModel> get currentPlaylists => _playlists;
-
-  // 互換性のため、デフォルト（先頭）のリストの中身を返す
-  List<LocalPlaylistItem> get currentItems {
-    if (_playlists.isEmpty) return [];
-    return _playlists.first.items;
-  }
-
-  // --- 永続化と移行ロジック ---
+  List<LocalPlaylistItem> get currentItems => _playlists.isNotEmpty ? _playlists.first.items : [];
 
   Future<void> _saveToStorage() async {
     final prefs = await SharedPreferences.getInstance();
     final String jsonStr = jsonEncode(_playlists.map((e) => e.toJson()).toList());
-    await prefs.setString('saved_playlists_v2', jsonStr); // 新しいキーを使用
-
-    // ストリーム更新
+    await prefs.setString('saved_playlists_v2', jsonStr);
     _notifyListeners();
   }
 
@@ -62,8 +50,6 @@ class PlaylistManager {
 
   Future<void> _loadFromStorage() async {
     final prefs = await SharedPreferences.getInstance();
-
-    // 1. 新しい形式のデータを読み込む
     final String? newJsonStr = prefs.getString('saved_playlists_v2');
 
     if (newJsonStr != null) {
@@ -75,38 +61,231 @@ class PlaylistManager {
         print("[Manager] Load new data failed: $e");
       }
     } else {
-      // 2. 新データがない場合、旧データを移行する
-      print("[Manager] Migrating old data...");
-      final String? oldJsonStr = prefs.getString('saved_playlist'); // 旧キー
-      List<LocalPlaylistItem> oldItems = [];
-
+      // 旧データ移行
+      final String? oldJsonStr = prefs.getString('saved_playlist');
       if (oldJsonStr != null) {
         try {
           final List<dynamic> jsonList = jsonDecode(oldJsonStr);
-          oldItems = jsonList.map((e) => LocalPlaylistItem.fromJson(e)).toList();
+          final oldItems = jsonList.map((e) => LocalPlaylistItem.fromJson(e)).toList();
+          final mainList = PlaylistModel(id: 'default_main', name: 'メインリスト', items: oldItems.cast<LocalPlaylistItem>());
+          _playlists.add(mainList);
+          await _saveToStorage();
         } catch (e) {}
       }
-
-      // 「メインリスト」を作成して旧データを投入
-      final mainList = PlaylistModel(
-          id: 'default_main',
-          name: 'メインリスト',
-          items: oldItems
-      );
-      _playlists.add(mainList);
-
-      // 保存
-      await _saveToStorage();
-
-      // 旧データは（安全のためすぐ消さずに）残すか、削除してもよい
-      // await prefs.remove('saved_playlist');
     }
-
     _notifyListeners();
+
+    // 【追加】起動時に未解析のものがあれば処理を開始
+    _startBackgroundResolutionLoop();
   }
 
-  // --- プレイリスト操作 ---
+  // 【追加】連続再生のシーケンス制御
+  Future<void> playSequence(DlnaDevice device, String playlistId, int startIndex) async {
+    final pIndex = _playlists.indexWhere((p) => p.id == playlistId);
+    if (pIndex == -1) return;
 
+    final playlist = _playlists[pIndex];
+    if (playlist.items.isEmpty) return;
+
+    // 範囲チェック
+    if (startIndex < 0 || startIndex >= playlist.items.length) {
+      startIndex = 0;
+    }
+
+    // 1. 履歴を更新
+    playlist.lastPlayedIndex = startIndex;
+    _saveToStorage(); // 保存
+
+    try {
+      // 2. Kodiのリストをクリア
+      final dlnaService = DlnaService();
+      await dlnaService.clearPlaylist(device);
+
+      // 3. 最初の1曲目を解決して再生
+      final firstItem = playlist.items[startIndex];
+      String? streamUrl = await ensureStreamUrl(playlistId, firstItem.id);
+
+      if (streamUrl != null) {
+        // 追加して再生
+        await dlnaService.addToPlaylist(device, streamUrl, firstItem.title, firstItem.thumbnailUrl);
+        await dlnaService.playFromPlaylist(device, 0); // 0番目(今入れたやつ)を再生
+      } else {
+        // URL取れなければスキップ等の処理が必要だが、一旦エラー表示
+        print("First item URL resolve failed");
+        return;
+      }
+
+      // 4. 【スマート・キューイング】残りの曲をバックグラウンドで順次追加
+      // 最大10曲先まで予約する（無限ループ防止とURL期限切れ対策）
+      _queueNextItems(device, playlistId, startIndex + 1, 10);
+
+    } catch (e) {
+      print("[Manager] Play sequence failed: $e");
+    }
+  }
+
+  // バックグラウンドで次々と追加していく処理
+  void _queueNextItems(DlnaDevice device, String playlistId, int nextIndex, int count) async {
+    final pIndex = _playlists.indexWhere((p) => p.id == playlistId);
+    if (pIndex == -1) return;
+
+    final items = _playlists[pIndex].items;
+    int addedCount = 0;
+
+    for (int i = nextIndex; i < items.length; i++) {
+      if (addedCount >= count) break;
+
+      // 3秒待機 (API制限回避 & 負荷軽減)
+      await Future.delayed(const Duration(seconds: 3));
+
+      final item = items[i];
+      // URL解決
+      String? url = await ensureStreamUrl(playlistId, item.id);
+
+      if (url != null) {
+        try {
+          // Kodiの末尾に追加
+          await DlnaService().addToPlaylist(device, url, item.title, item.thumbnailUrl);
+          print("[Manager] Queued next item: ${item.title}");
+          addedCount++;
+        } catch (e) {
+          print("[Manager] Queue failed for ${item.title}: $e");
+        }
+      }
+    }
+  }
+
+
+  // --- バックグラウンド解析ループ ---
+  void _startBackgroundResolutionLoop() async {
+    if (_isresolvingLoopRunning) return;
+    _isresolvingLoopRunning = true;
+    print("[Manager] Background resolution loop started.");
+
+    while (true) {
+      // 未解析(isResolving: true)かつエラーでないアイテムを探す
+      // ※全てのプレイリストを走査
+      String? targetPlaylistId;
+      String? targetItemId;
+
+      bool found = false;
+      for (var playlist in _playlists) {
+        for (var item in playlist.items) {
+          if (item.isResolving && !item.hasError) {
+            targetPlaylistId = playlist.id;
+            targetItemId = item.id;
+            found = true;
+            break;
+          }
+        }
+        if (found) break;
+      }
+
+      // 未解析がなくなったらループ終了
+      if (!found || targetPlaylistId == null || targetItemId == null) {
+        _isresolvingLoopRunning = false;
+        print("[Manager] Background resolution loop finished.");
+        break;
+      }
+
+      // 解析実行 (ensureStreamUrlが解決処理を行う)
+      await ensureStreamUrl(targetPlaylistId, targetItemId);
+
+      // 連続アクセスを防ぐため、少し待機 (重要)
+      await Future.delayed(const Duration(seconds: 3));
+    }
+  }
+
+  // --- YouTubeプレイリスト取込 ---
+  Future<String?> importFromYoutubePlaylist(String url) async {
+    try {
+      final info = await _ytService.fetchPlaylistInfo(url);
+      if (info == null) return null;
+
+      final String title = info['title'] ?? "YouTube Playlist";
+      final List itemsData = info['items'] ?? [];
+
+      final newPlaylistId = DateTime.now().millisecondsSinceEpoch.toString();
+      final newPlaylist = PlaylistModel(
+        id: newPlaylistId,
+        name: title,
+        items: [],
+      );
+
+      for (var item in itemsData) {
+        newPlaylist.items.add(LocalPlaylistItem(
+          title: item['title'],
+          originalUrl: item['url'],
+          thumbnailUrl: item['thumbnailUrl'],
+          durationStr: item['duration'],
+          isResolving: true, // ここで解析待ちとして登録
+        ));
+      }
+
+      _playlists.add(newPlaylist);
+      await _saveToStorage();
+
+      // 【追加】取込後に解析ループを開始
+      _startBackgroundResolutionLoop();
+
+      return newPlaylistId;
+    } catch (e) {
+      print("[Manager] Import failed: $e");
+      return null;
+    }
+  }
+
+  // --- URL解決 (オンデマンド & バックグラウンド兼用) ---
+  Future<String?> ensureStreamUrl(String playlistId, String itemId) async {
+    final pIndex = _playlists.indexWhere((p) => p.id == playlistId);
+    if (pIndex == -1) return null;
+
+    final iIndex = _playlists[pIndex].items.indexWhere((i) => i.id == itemId);
+    if (iIndex == -1) return null;
+
+    var item = _playlists[pIndex].items[iIndex];
+
+    // 既に解決済みなら返す
+    if (item.streamUrl != null && item.streamUrl!.isNotEmpty) {
+      // isResolvingが残っていたら消しておく
+      if (item.isResolving) {
+        _playlists[pIndex].items[iIndex] = item.copyWith(isResolving: false);
+        _saveToStorage();
+        _notifyListeners(); // UI更新
+      }
+      return item.streamUrl;
+    }
+
+    // 解析処理
+    try {
+      print("[Manager] Resolving: ${item.title}");
+      final streamUrl = await _ytService.fetchStreamUrl(item.originalUrl);
+
+      if (streamUrl != null) {
+        _playlists[pIndex].items[iIndex] = item.copyWith(
+            streamUrl: streamUrl,
+            isResolving: false,
+            hasError: false
+        );
+        _saveToStorage();
+        _notifyListeners(); // UI更新（インジケータを消すため）
+        return streamUrl;
+      } else {
+        throw Exception("Stream URL not found");
+      }
+    } catch (e) {
+      print("[Manager] Resolve failed: $e");
+      _playlists[pIndex].items[iIndex] = item.copyWith(
+          isResolving: false,
+          hasError: true
+      );
+      _saveToStorage();
+      _notifyListeners(); // UI更新（エラー表示のため）
+      return null;
+    }
+  }
+
+  // --- 既存メソッド ---
   void createPlaylist(String name) {
     final newList = PlaylistModel(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -119,12 +298,8 @@ class PlaylistManager {
 
   void deletePlaylist(String playlistId) {
     _playlists.removeWhere((p) => p.id == playlistId);
-    if (_playlists.isEmpty) {
-      // リストが0個にならないよう、空のメインリストを作成
-      createPlaylist("メインリスト");
-    } else {
-      _saveToStorage();
-    }
+    if (_playlists.isEmpty) createPlaylist("メインリスト");
+    _saveToStorage();
   }
 
   void renamePlaylist(String playlistId, String newName) {
@@ -135,10 +310,8 @@ class PlaylistManager {
     }
   }
 
-  // --- アイテム操作 (targetPlaylistId を指定可能に) ---
-
+  // 単体追加時もバックグラウンド処理を開始するように修正
   Future<void> processAndAdd(DlnaService dlnaService, Map<String, dynamic> metadata, {DlnaDevice? device, String? targetPlaylistId}) async {
-    // ID指定がなければ先頭（メイン）リストに入れる
     PlaylistModel targetList;
     if (targetPlaylistId != null) {
       targetList = _playlists.firstWhere((p) => p.id == targetPlaylistId, orElse: () => _playlists.first);
@@ -152,62 +325,21 @@ class PlaylistManager {
       originalUrl: metadata['url'],
       thumbnailUrl: metadata['thumbnailUrl'],
       durationStr: metadata['duration'],
-      isResolving: true,
+      isResolving: true, // 解析待ちとして追加
     );
 
     targetList.items.add(newItem);
-    _saveToStorage(); // 即保存
+    _saveToStorage();
     _notifyListeners();
 
-    print("[BG] Start resolving: ${newItem.title} in list: ${targetList.name}");
+    // 【追加】解析ループ開始
+    _startBackgroundResolutionLoop();
 
-    try {
-      final streamUrl = await _ytService.fetchStreamUrl(newItem.originalUrl);
-
-      if (streamUrl != null) {
-        // Kodiへの送信は「デバイス接続中」かつ「今すぐ再生的な意図がある場合」だが、
-        // プレイリストへのバックグラウンド追加時はKodiへは送らないのが基本（再生時に送る）。
-        // ただし、以前のロジックを維持するなら device!=null の時に送る。
-        // ※ 複数リスト対応に伴い、Kodiへの自動同期は「再生時」に任せるのが安全ですが、
-        //   既存機能維持のため、メインリストへの追加とみなして送信を試みます。
-
-        if (device != null) {
-          try {
-            // 複数リストある場合、Kodi側のプレイリストとどう同期するかは課題だが、一旦送る
-            // await dlnaService.addToPlaylist(...)
-            // ★修正: 複数リスト管理になったため、勝手にKodiへ送ると混乱する可能性がある。
-            // ここでは「解析完了」だけを行い、Kodiへの送信はユーザーが「再生」ボタンを押した時に任せるのが正解。
-            // しかし、CastPageの「今すぐ再生」などのために、URL解決は必須。
-          } catch(e) {}
-        }
-
-        final pIndex = _playlists.indexWhere((p) => p.id == targetList.id);
-        if (pIndex != -1) {
-          final iIndex = _playlists[pIndex].items.indexWhere((item) => item.id == newItem.id);
-          if (iIndex != -1) {
-            _playlists[pIndex].items[iIndex] = newItem.copyWith(streamUrl: streamUrl, isResolving: false);
-            _saveToStorage();
-            _notifyListeners();
-          }
-        }
-      } else {
-        throw Exception("Stream URL not found");
-      }
-    } catch (e) {
-      print("[BG] Failed: $e");
-      final pIndex = _playlists.indexWhere((p) => p.id == targetList.id);
-      if (pIndex != -1) {
-        final iIndex = _playlists[pIndex].items.indexWhere((item) => item.id == newItem.id);
-        if (iIndex != -1) {
-          _playlists[pIndex].items[iIndex] = newItem.copyWith(isResolving: false, hasError: true);
-          _saveToStorage();
-          _notifyListeners();
-        }
-      }
-    }
+    // ※元のprocessAndAddにあった即時解析ロジックは _startBackgroundResolutionLoop に任せるため削除・統合しました
   }
 
-  // 並べ替え (ID対応)
+
+
   void reorder(int oldIndex, int newIndex, {String? playlistId}) {
     final list = (playlistId == null)
         ? _playlists.first
@@ -220,7 +352,6 @@ class PlaylistManager {
     _notifyListeners();
   }
 
-  // 削除 (ID対応)
   void removeItem(int index, {String? playlistId}) {
     final list = (playlistId == null)
         ? _playlists.first
@@ -243,28 +374,18 @@ class PlaylistManager {
     _notifyListeners();
   }
 
-  // --- アイテム移動 ---
-
   void moveItemToPlaylist(String itemId, {required String? fromPlaylistId, required String toPlaylistId}) {
-    // 元のリストを特定（nullならメインリスト）
     final fromList = (fromPlaylistId == null)
         ? _playlists.first
         : _playlists.firstWhere((p) => p.id == fromPlaylistId, orElse: () => _playlists.first);
 
-    // 移動先のリストを特定
     final toListIndex = _playlists.indexWhere((p) => p.id == toPlaylistId);
-    if (toListIndex == -1) return; // 移動先が見つからない
-    final toList = _playlists[toListIndex];
+    if (toListIndex == -1 || fromList.id == _playlists[toListIndex].id) return;
 
-    // 同じリストへの移動なら何もしない
-    if (fromList.id == toList.id) return;
-
-    // アイテムを探して移動
     final itemIndex = fromList.items.indexWhere((i) => i.id == itemId);
     if (itemIndex != -1) {
       final item = fromList.items.removeAt(itemIndex);
-      toList.items.add(item);
-
+      _playlists[toListIndex].items.add(item);
       _saveToStorage();
       _notifyListeners();
     }
@@ -274,7 +395,6 @@ class PlaylistManager {
     final list = (playlistId == null)
         ? _playlists.first
         : _playlists.firstWhere((p) => p.id == playlistId, orElse: () => _playlists.first);
-
     list.items.clear();
     _saveToStorage();
     _notifyListeners();

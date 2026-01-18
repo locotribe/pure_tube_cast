@@ -3,15 +3,12 @@ import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 class YoutubeService {
   final YoutubeExplode _yt = YoutubeExplode();
 
-  /// 【高速】動画のメタデータ（タイトル、画像、時間）のみを取得
+  /// 動画メタデータの取得 (既存)
   Future<Map<String, dynamic>?> fetchMetadata(String url) async {
     try {
       final videoId = VideoId(url);
       final video = await _yt.videos.get(videoId);
-
       String durationStr = _formatDuration(video.duration);
-
-      print("[DEBUG] YoutubeService: Metadata fetched: ${video.title}");
 
       return {
         'id': video.id.value,
@@ -26,16 +23,40 @@ class YoutubeService {
     }
   }
 
-  /// 【低速】再生用のストリームURLを取得（バックグラウンド実行用）
+  /// 【追加】プレイリスト情報の取得
+  Future<Map<String, dynamic>?> fetchPlaylistInfo(String url) async {
+    try {
+      final playlistId = PlaylistId(url);
+
+      // プレイリストの情報を取得
+      final playlist = await _yt.playlists.get(playlistId);
+
+      // 動画一覧を取得 (最大200件まで取得するように制限しても良いですが、一旦全件取得します)
+      final videos = await _yt.playlists.getVideos(playlistId).toList();
+
+      return {
+        'title': playlist.title,
+        'items': videos.map((v) => {
+          'title': v.title,
+          'url': v.url,
+          'thumbnailUrl': v.thumbnails.highResUrl,
+          'duration': _formatDuration(v.duration),
+        }).toList(),
+      };
+    } catch (e) {
+      print("[DEBUG] Playlist Fetch Error: $e");
+      return null;
+    }
+  }
+
+  /// ストリームURLの取得 (既存)
   Future<String?> fetchStreamUrl(String url) async {
     try {
       final videoId = VideoId(url);
       final manifest = await _yt.videos.streamsClient.getManifest(videoId);
       final streamInfo = manifest.muxed.withHighestBitrate();
-      print("[DEBUG] YoutubeService: Stream URL resolved");
       return streamInfo.url.toString();
     } catch (e) {
-      print("[DEBUG] Stream Fetch Error: $e");
       return null;
     }
   }

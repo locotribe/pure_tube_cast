@@ -19,8 +19,10 @@ class SiteManager {
 
   // --- 操作ロジック ---
 
-  // 【変更】iconUrl引数を追加
   void addSite(String name, String url, {String? iconUrl}) {
+    // 【追加】重複チェック
+    if (isRegistered(url)) return;
+
     final newSite = SiteModel(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       name: name,
@@ -31,11 +33,27 @@ class SiteManager {
     _notifyAndSave();
   }
 
-  // 【追加】サイト情報の更新（編集用）
+  // 【追加】登録済みチェック
+  bool isRegistered(String url) {
+    String normalize(String u) {
+      var s = u.trim();
+      if (s.endsWith('/')) s = s.substring(0, s.length - 1);
+      return s;
+    }
+
+    final target = normalize(url);
+
+    // YouTubeトップなどは登録不要
+    if (target == 'https://www.youtube.com' || target == 'https://m.youtube.com') {
+      return true;
+    }
+
+    return _sites.any((site) => normalize(site.url) == target);
+  }
+
   void updateSite(String id, String newName, String newUrl, {String? newIconUrl}) {
     final index = _sites.indexWhere((s) => s.id == id);
     if (index != -1) {
-      // 既存のアイコンURLを維持するか、新しいもので上書きするか
       final oldIcon = _sites[index].iconUrl;
       _sites[index] = SiteModel(
         id: id,

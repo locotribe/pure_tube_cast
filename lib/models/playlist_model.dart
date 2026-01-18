@@ -4,11 +4,13 @@ class PlaylistModel {
   final String id;
   String name;
   final List<LocalPlaylistItem> items;
+  int lastPlayedIndex; // 【追加】最後に再生したインデックス
 
   PlaylistModel({
     required this.id,
     required this.name,
     List<LocalPlaylistItem>? items,
+    this.lastPlayedIndex = 0, // 【追加】初期値0
   }) : items = items ?? [];
 
   Map<String, dynamic> toJson() {
@@ -16,6 +18,7 @@ class PlaylistModel {
       'id': id,
       'name': name,
       'items': items.map((e) => e.toJson()).toList(),
+      'lastPlayedIndex': lastPlayedIndex, // 【追加】保存
     };
   }
 
@@ -26,6 +29,7 @@ class PlaylistModel {
       items: (json['items'] as List?)
           ?.map((e) => LocalPlaylistItem.fromJson(e))
           .toList() ?? [],
+      lastPlayedIndex: json['lastPlayedIndex'] ?? 0, // 【追加】復元
     );
   }
 }

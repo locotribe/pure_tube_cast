@@ -427,6 +427,16 @@ class DlnaService {
     });
   }
 
+  /// 6. プレイリストのクリア (連続再生の開始時に使用)
+  Future<void> clearPlaylist(DlnaDevice device) async {
+    print("[DlnaService] Clearing playlist");
+    try {
+      await _sendJsonRpc(device, "Playlist.Clear", {"playlistid": 1});
+    } catch (e) {
+      print("[DlnaService] Clear playlist failed: $e");
+    }
+  }
+
   // --- 共通 JSON-RPC 送信 ---
   Future<dynamic> _sendJsonRpc(DlnaDevice device, String method, Map<String, dynamic> params) async {
     final kodiUrl = Uri.parse('http://${device.ip}:8080/jsonrpc');

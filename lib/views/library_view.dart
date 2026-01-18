@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../managers/playlist_manager.dart';
-import '../pages/playlist_page.dart'; // 詳細画面へ飛ぶために必要
+import '../services/dlna_service.dart';
+import '../pages/playlist_page.dart';
 
 class LibraryView extends StatelessWidget {
   const LibraryView({super.key});
@@ -8,60 +9,100 @@ class LibraryView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final manager = PlaylistManager();
+    final dlnaService = DlnaService();
 
     return Stack(
       children: [
-        StreamBuilder<List<PlaylistModel>>(
-          stream: manager.playlistsStream,
-          initialData: manager.currentPlaylists,
-          builder: (context, snapshot) {
-            final playlists = snapshot.data ?? [];
+        // デバイス接続状態を監視（再生ボタンの有効/無効のため）
+        StreamBuilder<DlnaDevice?>(
+          stream: dlnaService.connectedDeviceStream,
+          initialData: dlnaService.currentDevice,
+          builder: (context, deviceSnapshot) {
+            final currentDevice = deviceSnapshot.data;
 
-            if (playlists.isEmpty) {
-              return const Center(child: Text("プレイリストがありません"));
-            }
+            return StreamBuilder<List<PlaylistModel>>(
+              stream: manager.playlistsStream,
+              initialData: manager.currentPlaylists,
+              builder: (context, snapshot) {
+                final playlists = snapshot.data ?? [];
 
-            return ListView.builder(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 80), // FABとかぶらないよう下余白
-              itemCount: playlists.length,
-              itemBuilder: (context, index) {
-                final playlist = playlists[index];
-                return Card(
-                  elevation: 2,
-                  margin: const EdgeInsets.symmetric(vertical: 6),
-                  child: ListTile(
-                    leading: const Icon(Icons.folder, color: Colors.orange, size: 40),
-                    title: Text(playlist.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                    subtitle: Text("${playlist.items.length} videos"),
-                    onTap: () {
-                      // リストの中身へ遷移
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => PlaylistPage(playlistId: playlist.id),
+                if (playlists.isEmpty) {
+                  return const Center(child: Text("プレイリストがありません"));
+                }
+
+                return ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
+                  itemCount: playlists.length,
+                  itemBuilder: (context, index) {
+                    final playlist = playlists[index];
+                    return Card(
+                      elevation: 2,
+                      margin: const EdgeInsets.symmetric(vertical: 6),
+                      child: ListTile(
+                        leading: const Icon(Icons.folder, color: Colors.orange, size: 40),
+                        title: Text(playlist.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                        subtitle: Text("${playlist.items.length} videos"),
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => PlaylistPage(playlistId: playlist.id),
+                            ),
+                          );
+                        },
+                        // 右側に再生ボタンとメニューを配置
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // フォルダ再生ボタン
+                            IconButton(
+                              icon: const Icon(Icons.play_circle_fill, color: Colors.red, size: 32),
+                              tooltip: "続きから再生 (または最初から)",
+                              onPressed: (currentDevice != null && playlist.items.isNotEmpty)
+                                  ? () {
+                                manager.playSequence(
+                                    currentDevice,
+                                    playlist.id,
+                                    playlist.lastPlayedIndex
+                                );
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text("「${playlist.name}」を再生します"))
+                                );
+                              }
+                                  : null,
+                            ),
+                            PopupMenuButton<String>(
+                              onSelected: (value) {
+                                if (value == 'rename') {
+                                  _showRenameDialog(context, manager, playlist);
+                                } else if (value == 'delete') {
+                                  _showDeleteDialog(context, manager, playlist);
+                                } else if (value == 'play_start') {
+                                  // 最初から再生
+                                  if (currentDevice != null && playlist.items.isNotEmpty) {
+                                    manager.playSequence(currentDevice, playlist.id, 0);
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(content: Text("最初から再生します"))
+                                    );
+                                  }
+                                }
+                              },
+                              itemBuilder: (context) => [
+                                const PopupMenuItem(value: 'play_start', child: Text("最初から再生")),
+                                const PopupMenuItem(value: 'rename', child: Text("名前を変更")),
+                                const PopupMenuItem(value: 'delete', child: Text("削除", style: TextStyle(color: Colors.red))),
+                              ],
+                            ),
+                          ],
                         ),
-                      );
-                    },
-                    trailing: PopupMenuButton<String>(
-                      onSelected: (value) {
-                        if (value == 'rename') {
-                          _showRenameDialog(context, manager, playlist);
-                        } else if (value == 'delete') {
-                          _showDeleteDialog(context, manager, playlist);
-                        }
-                      },
-                      itemBuilder: (context) => [
-                        const PopupMenuItem(value: 'rename', child: Text("名前を変更")),
-                        const PopupMenuItem(value: 'delete', child: Text("削除", style: TextStyle(color: Colors.red))),
-                      ],
-                    ),
-                  ),
+                      ),
+                    );
+                  },
                 );
               },
             );
           },
         ),
-        // 右下の追加ボタン
         Positioned(
           right: 16,
           bottom: 16,
@@ -75,7 +116,6 @@ class LibraryView extends StatelessWidget {
     );
   }
 
-  // --- ダイアログ（PlaylistsPageと同じもの） ---
   void _showCreateDialog(BuildContext context, PlaylistManager manager) {
     final controller = TextEditingController();
     showDialog(
@@ -103,6 +143,7 @@ class LibraryView extends StatelessWidget {
     );
   }
 
+  // エラーになっていたメソッドを復活
   void _showRenameDialog(BuildContext context, PlaylistManager manager, PlaylistModel playlist) {
     final controller = TextEditingController(text: playlist.name);
     showDialog(
@@ -129,6 +170,7 @@ class LibraryView extends StatelessWidget {
     );
   }
 
+  // エラーになっていたメソッドを復活
   void _showDeleteDialog(BuildContext context, PlaylistManager manager, PlaylistModel playlist) {
     showDialog(
       context: context,
