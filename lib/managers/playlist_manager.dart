@@ -26,7 +26,10 @@ class PlaylistManager {
 
   final YoutubeService _ytService = YoutubeService();
 
-  bool _isResolvingLoopRunning = false;
+  // 監視用タイマー
+  Timer? _monitorTimer;
+  // 最後に再生を開始したインデックス (Kodiの0番目に対応するアプリ側のインデックス)
+  int _sessionStartIndex = 0;
 
   List<PlaylistModel> get currentPlaylists => _playlists;
   List<LocalPlaylistItem> get currentItems => _playlists.isNotEmpty ? _playlists.first.items : [];
@@ -72,220 +75,218 @@ class PlaylistManager {
       }
     }
     _notifyListeners();
-    _startBackgroundResolutionLoop();
   }
 
-  void _startBackgroundResolutionLoop() async {
-    if (_isResolvingLoopRunning) return;
-    _isResolvingLoopRunning = true;
-    print("[Manager] Background resolution loop started.");
+  // --- 監視システム ---
+  void _startMonitor(DlnaDevice device, String playlistId) {
+    _monitorTimer?.cancel();
 
-    while (true) {
-      String? targetPlaylistId;
-      String? targetItemId;
+    // 3秒おきにKodiの状態を確認
+    _monitorTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
+      final status = await DlnaService().getPlayerStatus(device);
+      if (status != null) {
+        final int kodiPosition = status['position'];
+        // Kodiの0番目 = アプリの _sessionStartIndex 番目
+        // したがって、現在の再生動画 = _sessionStartIndex + kodiPosition
+        final int currentAppIndex = _sessionStartIndex + kodiPosition;
 
-      bool found = false;
-      for (var playlist in _playlists) {
-        for (var item in playlist.items) {
-          // 「解析中」かつ「エラーなし」のものを探して処理する
-          if (item.isResolving && !item.hasError) {
-            targetPlaylistId = playlist.id;
-            targetItemId = item.id;
-            found = true;
-            break;
-          }
-        }
-        if (found) break;
+        _syncPlayingStatus(playlistId, currentAppIndex);
       }
-
-      if (!found || targetPlaylistId == null || targetItemId == null) {
-        _isResolvingLoopRunning = false;
-        print("[Manager] Background resolution loop finished.");
-        break;
-      }
-
-      await ensureStreamUrl(targetPlaylistId, targetItemId);
-      await Future.delayed(const Duration(seconds: 3));
-    }
+    });
   }
 
-  // --- 連続再生シーケンス ---
-  Future<void> playSequence(DlnaDevice device, String playlistId, int startIndex) async {
+  void _syncPlayingStatus(String playlistId, int playingIndex) {
     final pIndex = _playlists.indexWhere((p) => p.id == playlistId);
     if (pIndex == -1) return;
 
-    var playlist = _playlists[pIndex];
-    if (playlist.items.isEmpty) return;
+    final playlist = _playlists[pIndex];
+    if (playingIndex < 0 || playingIndex >= playlist.items.length) return;
 
-    if (startIndex < 0 || startIndex >= playlist.items.length) {
-      startIndex = 0;
-    }
+    bool updated = false;
 
-    // 1. 状態のリセット (再生中・送信済みマークを全てクリア)
-    for (int i = 0; i < playlist.items.length; i++) {
-      bool changed = false;
-      if (playlist.items[i].isQueued || playlist.items[i].isPlaying) {
-        playlist.items[i] = playlist.items[i].copyWith(isQueued: false, isPlaying: false);
-        changed = true;
-      }
-    }
-
-    // 履歴更新
-    playlist.lastPlayedIndex = startIndex;
-    _saveToStorage();
-
-    try {
-      final dlnaService = DlnaService();
-      await dlnaService.clearPlaylist(device);
-
-      // 2. 最初の1曲目を処理
-      final firstItem = playlist.items[startIndex];
-      String? streamUrl = await ensureStreamUrl(playlistId, firstItem.id);
-
-      if (streamUrl != null) {
-        await dlnaService.addToPlaylist(device, streamUrl, firstItem.title, firstItem.thumbnailUrl);
-        await dlnaService.playFromPlaylist(device, 0);
-
-        // 【追加】「再生中」マークをつける
-        _markAsPlaying(playlistId, firstItem.id);
-      } else {
-        print("First item URL resolve failed");
-        return;
-      }
-
-      // 3. 残りをバックグラウンド追加 (5件に制限)
-      _queueNextItems(device, playlistId, startIndex + 1, 5);
-
-    } catch (e) {
-      print("[Manager] Play sequence failed: $e");
-    }
-  }
-
-  void _queueNextItems(DlnaDevice device, String playlistId, int nextIndex, int count) async {
-    // 順番に追加していく
-    int processedCount = 0;
-    int currentIndex = nextIndex;
-
-    while (processedCount < count) {
-      final pIndex = _playlists.indexWhere((p) => p.id == playlistId);
-      if (pIndex == -1) break;
-      final currentItems = _playlists[pIndex].items;
-
-      if (currentIndex >= currentItems.length) break;
-
-      // 間隔を少し広げる (3秒 -> 4秒) タイムアウト防止
-      await Future.delayed(const Duration(seconds: 4));
-
-      final item = currentItems[currentIndex];
-      String? url = await ensureStreamUrl(playlistId, item.id);
-
-      if (url != null) {
-        try {
-          await DlnaService().addToPlaylist(device, url, item.title, item.thumbnailUrl);
-          print("[Manager] Queued next item: ${item.title}");
-
-          // 送信済みマーク
-          _markAsQueued(playlistId, item.id);
-
-        } catch (e) {
-          print("[Manager] Queue failed for ${item.title}: $e");
-          // エラーでもループは止めず、次の動画へ
+    // 現在の状態と違えば更新
+    if (!playlist.items[playingIndex].isPlaying) {
+      // 全ての再生中フラグをリセットし、対象のみONにする
+      for (int i = 0; i < playlist.items.length; i++) {
+        if (i == playingIndex) {
+          _playlists[pIndex].items[i] = playlist.items[i].copyWith(isPlaying: true, isQueued: true);
+        } else {
+          if (playlist.items[i].isPlaying) {
+            _playlists[pIndex].items[i] = playlist.items[i].copyWith(isPlaying: false);
+          }
         }
       }
-      currentIndex++;
-      processedCount++;
+      updated = true;
+    }
+
+    if (updated) {
+      _notifyListeners();
+      // 再生位置が変わったので補充チェック
+      _checkAndQueueNext(DlnaService().currentDevice!, playlistId, playingIndex);
     }
   }
 
-  // 「送信済み」フラグを立てる
+  // 自動補充ロジック
+  bool _isQueueLoopRunning = false;
+
+  void _checkAndQueueNext(DlnaDevice device, String playlistId, int currentIndex) async {
+    if (_isQueueLoopRunning) return;
+    _isQueueLoopRunning = true;
+
+    try {
+      final pIndex = _playlists.indexWhere((p) => p.id == playlistId);
+      if (pIndex == -1) return;
+
+      final items = _playlists[pIndex].items;
+
+      // 現在の再生位置の次から5つ先までをチェック
+      int lookAhead = 5;
+
+      for (int i = 1; i <= lookAhead; i++) {
+        int nextIndex = currentIndex + i;
+        if (nextIndex >= items.length) break;
+
+        final item = items[nextIndex];
+
+        // まだ送信しておらず、エラーでもない場合のみ処理
+        if (!item.isQueued && !item.hasError) {
+          print("[Manager] Auto-replenish: ${item.title}");
+
+          // 解析と送信（リトライ付き）
+          String? url = await ensureStreamUrl(playlistId, item.id);
+          if (url != null) {
+            try {
+              await DlnaService().addToPlaylist(device, url, item.title, item.thumbnailUrl);
+              _markAsQueued(playlistId, item.id);
+              // 連続送信を防ぐため少し待機
+              await Future.delayed(const Duration(seconds: 2));
+            } catch (e) {
+              print("[Manager] Auto-replenish send failed: $e");
+            }
+          }
+        }
+      }
+    } finally {
+      _isQueueLoopRunning = false;
+    }
+  }
+
   void _markAsQueued(String playlistId, String itemId) {
     final pIndex = _playlists.indexWhere((p) => p.id == playlistId);
     if (pIndex != -1) {
       final iIndex = _playlists[pIndex].items.indexWhere((i) => i.id == itemId);
       if (iIndex != -1) {
-        _playlists[pIndex].items[iIndex] = _playlists[pIndex].items[iIndex].copyWith(
-            isQueued: true,
-            hasError: false // 送信できたらエラーは消す
-        );
+        _playlists[pIndex].items[iIndex] = _playlists[pIndex].items[iIndex].copyWith(isQueued: true);
         _notifyListeners();
       }
     }
   }
 
-  // 【追加】「再生中」フラグを立てる (他は消す)
-  void _markAsPlaying(String playlistId, String itemId) {
-    final pIndex = _playlists.indexWhere((p) => p.id == playlistId);
-    if (pIndex == -1) return;
-
-    for (int i = 0; i < _playlists[pIndex].items.length; i++) {
-      final item = _playlists[pIndex].items[i];
-      if (item.id == itemId) {
-        // 対象アイテム: 再生中ON, 送信済ON (再生してるということはKodiにある)
-        _playlists[pIndex].items[i] = item.copyWith(isPlaying: true, isQueued: true);
-      } else if (item.isPlaying) {
-        // 他のアイテム: 再生中OFF
-        _playlists[pIndex].items[i] = item.copyWith(isPlaying: false);
-      }
-    }
-    _notifyListeners();
-  }
-
-  // --- URL解決 ---
+  // --- 解析（リトライ機能付き） ---
   Future<String?> ensureStreamUrl(String playlistId, String itemId) async {
     final pIndex = _playlists.indexWhere((p) => p.id == playlistId);
     if (pIndex == -1) return null;
+
+    // アイテム検索
     final iIndex = _playlists[pIndex].items.indexWhere((i) => i.id == itemId);
     if (iIndex == -1) return null;
-
     var item = _playlists[pIndex].items[iIndex];
 
-    // 解析済みならそれを返す
+    // 既にURLがあれば返す
     if (item.streamUrl != null && item.streamUrl!.isNotEmpty) {
+      // isResolvingフラグが残っていたら消す
       if (item.isResolving) {
         _playlists[pIndex].items[iIndex] = item.copyWith(isResolving: false);
-        _saveToStorage();
         _notifyListeners();
       }
       return item.streamUrl;
     }
 
-    // 解析開始
-    try {
-      print("[Manager] Resolving: ${item.title}");
+    // UI更新（解析中）
+    _playlists[pIndex].items[iIndex] = item.copyWith(isResolving: true, hasError: false);
+    _notifyListeners();
 
-      // UI用に「解析中」フラグを立てる（もし立ってなければ）
-      if (!item.isResolving) {
-        _playlists[pIndex].items[iIndex] = item.copyWith(isResolving: true, hasError: false);
-        _notifyListeners();
+    // リトライループ
+    int retryCount = 0;
+    const maxRetries = 3;
+
+    while (retryCount < maxRetries) {
+      try {
+        final streamUrl = await _ytService.fetchStreamUrl(item.originalUrl);
+        if (streamUrl != null) {
+          // 成功
+          _playlists[pIndex].items[iIndex] = item.copyWith(
+              streamUrl: streamUrl,
+              isResolving: false,
+              hasError: false
+          );
+          _saveToStorage();
+          _notifyListeners();
+          return streamUrl;
+        }
+      } catch (e) {
+        print("[Manager] Resolve retry $retryCount failed: $e");
       }
 
-      final streamUrl = await _ytService.fetchStreamUrl(item.originalUrl);
+      retryCount++;
+      await Future.delayed(const Duration(seconds: 2)); // 待機してリトライ
+    }
 
-      if (streamUrl != null) {
-        _playlists[pIndex].items[iIndex] = item.copyWith(
-            streamUrl: streamUrl,
-            isResolving: false,
-            hasError: false
-        );
-        _saveToStorage();
+    // 失敗
+    _playlists[pIndex].items[iIndex] = item.copyWith(isResolving: false, hasError: true);
+    _notifyListeners();
+    return null;
+  }
+
+  // --- 連続再生シーケンス（開始点） ---
+  Future<void> playSequence(DlnaDevice device, String playlistId, int startIndex) async {
+    final pIndex = _playlists.indexWhere((p) => p.id == playlistId);
+    if (pIndex == -1) return;
+
+    final playlist = _playlists[pIndex];
+    if (playlist.items.isEmpty) return;
+
+    if (startIndex < 0) startIndex = 0;
+
+    // 【重要】セッション開始位置を記憶
+    _sessionStartIndex = startIndex;
+
+    // 1. リセット
+    for (int i = 0; i < playlist.items.length; i++) {
+      if (playlist.items[i].isPlaying || playlist.items[i].isQueued) {
+        _playlists[pIndex].items[i] = playlist.items[i].copyWith(isPlaying: false, isQueued: false);
+      }
+    }
+    _saveToStorage();
+
+    // 2. 監視スタート
+    _startMonitor(device, playlistId);
+
+    try {
+      final dlnaService = DlnaService();
+      await dlnaService.clearPlaylist(device);
+
+      // 3. 開始曲を再生
+      final firstItem = playlist.items[startIndex];
+      String? url = await ensureStreamUrl(playlistId, firstItem.id);
+
+      if (url != null) {
+        await dlnaService.addToPlaylist(device, url, firstItem.title, firstItem.thumbnailUrl);
+        await dlnaService.playFromPlaylist(device, 0);
+
+        // 即座にステータス反映 (監視のラグを埋める)
+        _playlists[pIndex].items[startIndex] = firstItem.copyWith(isPlaying: true, isQueued: true);
         _notifyListeners();
-        return streamUrl;
-      } else {
-        throw Exception("Stream URL not found");
+
+        // 4. 初回の補充
+        _checkAndQueueNext(device, playlistId, startIndex);
       }
     } catch (e) {
-      print("[Manager] Resolve failed: $e");
-      _playlists[pIndex].items[iIndex] = item.copyWith(
-          isResolving: false,
-          hasError: true
-      );
-      _saveToStorage();
-      _notifyListeners();
-      return null;
+      print("[Manager] Play sequence failed: $e");
     }
   }
 
-  // その他のメソッドは変更なし
+  // その他のメソッド（import, processAndAddなど）はそのまま
   Future<String?> importFromYoutubePlaylist(String url) async {
     try {
       final info = await _ytService.fetchPlaylistInfo(url);
@@ -305,7 +306,6 @@ class PlaylistManager {
       }
       _playlists.add(newPlaylist);
       await _saveToStorage();
-      _startBackgroundResolutionLoop();
       return newPlaylistId;
     } catch (e) {
       print("[Manager] Import failed: $e");
@@ -348,7 +348,7 @@ class PlaylistManager {
     targetList.items.add(newItem);
     _saveToStorage();
     _notifyListeners();
-    _startBackgroundResolutionLoop();
+    ensureStreamUrl(targetList.id, newItem.id);
   }
   void reorder(int oldIndex, int newIndex, {String? playlistId}) {
     final list = (playlistId == null) ? _playlists.first : _playlists.firstWhere((p) => p.id == playlistId, orElse: () => _playlists.first);

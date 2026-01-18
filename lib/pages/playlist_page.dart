@@ -148,20 +148,19 @@ class _PlaylistPageState extends State<PlaylistPage> {
   }
 
   Widget _buildListBody(List<LocalPlaylistItem> items, bool isConnected, DlnaDevice? currentDevice) {
-    // 共通のスクロールバー設定
-    const double scrollbarThickness = 12.0; // 太くして掴みやすく
-    const bool isScrollbarInteractive = true; // 【重要】これでドラッグ可能になります
+    const double scrollbarThickness = 12.0;
+    const bool isScrollbarInteractive = true;
 
     if (_isSelectionMode) {
       return Scrollbar(
         controller: _scrollController,
         thumbVisibility: true,
         thickness: scrollbarThickness,
-        interactive: isScrollbarInteractive, // ドラッグ有効化
+        interactive: isScrollbarInteractive,
         radius: const Radius.circular(8.0),
         child: ListView.builder(
           controller: _scrollController,
-          physics: const AlwaysScrollableScrollPhysics(), // リストが短くてもスクロール動作を可能に
+          physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.all(12),
           itemCount: items.length,
           itemBuilder: (context, index) {
@@ -184,11 +183,11 @@ class _PlaylistPageState extends State<PlaylistPage> {
       controller: _scrollController,
       thumbVisibility: true,
       thickness: scrollbarThickness,
-      interactive: isScrollbarInteractive, // ドラッグ有効化
+      interactive: isScrollbarInteractive,
       radius: const Radius.circular(8.0),
       child: ReorderableListView.builder(
         scrollController: _scrollController,
-        physics: const AlwaysScrollableScrollPhysics(), // リストが短くてもスクロール動作を可能に
+        physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
         itemCount: items.length,
         onReorder: (oldIndex, newIndex) {
@@ -227,37 +226,56 @@ class _PlaylistPageState extends State<PlaylistPage> {
               key: ValueKey(item.id),
               elevation: isPlaying ? 4 : 2,
               color: isPlaying ? Colors.red.shade50 : null,
-              shape: isPlaying ? RoundedRectangleBorder(side: const BorderSide(color: Colors.red, width: 2), borderRadius: BorderRadius.circular(12)) : null,
+              shape: isPlaying
+                  ? RoundedRectangleBorder(side: const BorderSide(color: Colors.red, width: 2), borderRadius: BorderRadius.circular(12))
+                  : null,
               margin: const EdgeInsets.symmetric(vertical: 4),
               child: ListTile(
                 contentPadding: const EdgeInsets.all(8),
+
+                // サムネイルに再生中マークを重ねる
                 leading: SizedBox(
                   width: 80,
-                  child: item.thumbnailUrl != null
-                      ? Image.network(item.thumbnailUrl!, fit: BoxFit.cover, errorBuilder: (_,__,___) => const Icon(Icons.movie))
-                      : const Icon(Icons.movie),
+                  height: 45,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Positioned.fill(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: item.thumbnailUrl != null
+                              ? Image.network(item.thumbnailUrl!, fit: BoxFit.cover, errorBuilder: (_,__,___) => const Icon(Icons.movie))
+                              : const Icon(Icons.movie, color: Colors.grey),
+                        ),
+                      ),
+                      if (isPlaying)
+                        Container(
+                          color: Colors.black54,
+                          child: const Center(
+                            child: Icon(Icons.equalizer, color: Colors.red, size: 24),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
+
                 title: Text(
                   item.title,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
+                      fontWeight: isPlaying ? FontWeight.bold : FontWeight.normal,
                       color: isPlaying ? Colors.red : Colors.black
                   ),
                 ),
+
+                // ステータス表示（再生中はサムネイルでわかるため、ここは送信済み等の表示に専念）
                 subtitle: Row(
                   children: [
                     Text(item.durationStr, style: const TextStyle(fontSize: 12)),
                     const SizedBox(width: 12),
 
-                    if (item.isPlaying) ...[
-                      const Icon(Icons.play_circle, size: 16, color: Colors.red),
-                      const SizedBox(width: 4),
-                      const Text("再生中", style: TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.bold)),
-
-                    ] else if (item.hasError) ...[
+                    if (item.hasError) ...[
                       const Icon(Icons.error, size: 16, color: Colors.red),
                       const SizedBox(width: 4),
                       const Text("エラー", style: TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.bold)),
