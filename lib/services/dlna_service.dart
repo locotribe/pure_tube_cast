@@ -341,7 +341,7 @@ class DlnaService {
     }
   }
 
-  /// 2. リストに追加
+  /// 2. 末尾に追加
   Future<void> addToPlaylist(DlnaDevice device, String videoUrl, String title, String? thumbnailUrl) async {
     try {
       await _sendJsonRpc(device, "Playlist.Add", {
@@ -351,6 +351,22 @@ class DlnaService {
     } catch (e) {
       print("[DlnaService] addToPlaylist failed: $e");
       throw Exception("Kodiへの接続に失敗しました");
+    }
+  }
+
+  /// 【追加】指定位置に挿入
+  Future<void> insertToPlaylist(DlnaDevice device, int position, String videoUrl, String title, String? thumbnailUrl) async {
+    try {
+      await _sendJsonRpc(device, "Playlist.Insert", {
+        "playlistid": 1,
+        "position": position,
+        "item": {"file": videoUrl}
+      });
+    } catch (e) {
+      print("[DlnaService] insertToPlaylist failed: $e");
+      // Insertが失敗した場合(古いKodi等)、AddしてMoveする代替手段も考えられるが、
+      // 基本的にInsertはサポートされている前提
+      throw Exception("挿入に失敗しました");
     }
   }
 
@@ -392,16 +408,14 @@ class DlnaService {
     }
   }
 
-  /// 【追加】現在再生中の状態(位置とタイトル)を取得 (監視用)
+  /// 現在再生中の状態を取得
   Future<Map<String, dynamic>?> getPlayerStatus(DlnaDevice device) async {
     try {
-      // position(リスト内の位置)を取得
       final props = await _sendJsonRpc(device, "Player.GetProperties", {
         "playerid": 1,
         "properties": ["position", "time", "totaltime"]
       });
 
-      // アイテム情報(タイトル)を取得
       final item = await _sendJsonRpc(device, "Player.GetItem", {
         "playerid": 1,
         "properties": ["title", "file"]
@@ -413,9 +427,7 @@ class DlnaService {
           'title': item['item']['label'] ?? item['item']['title'] ?? '',
         };
       }
-    } catch (e) {
-      // 再生中でない場合などは無視
-    }
+    } catch (e) { }
     return null;
   }
 
