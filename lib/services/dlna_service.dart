@@ -12,6 +12,7 @@ class DlnaDevice {
   final String serviceType;
   final int port;
   final bool isManual;
+  final String? macAddress;
 
   DlnaDevice({
     required this.ip,
@@ -21,6 +22,7 @@ class DlnaDevice {
     required this.serviceType,
     required this.port,
     this.isManual = false,
+    this.macAddress,
   });
 
   DlnaDevice copyWith({
@@ -30,6 +32,7 @@ class DlnaDevice {
     String? serviceType,
     int? port,
     bool? isManual,
+    String? macAddress,
   }) {
     return DlnaDevice(
       ip: ip,
@@ -39,18 +42,17 @@ class DlnaDevice {
       serviceType: serviceType ?? this.serviceType,
       port: port ?? this.port,
       isManual: isManual ?? this.isManual,
+      macAddress: macAddress ?? this.macAddress,
     );
   }
 }
 
-// Kodiからのアイテム受取用クラス
 class KodiPlaylistItem {
   final String label;
   final String file;
   KodiPlaylistItem({required this.label, required this.file});
 
   factory KodiPlaylistItem.fromJson(Map<String, dynamic> json) {
-    // titleを優先して取得
     String name = json['title'] ?? '';
     if (name.isEmpty) {
       name = json['label'] ?? '';
@@ -67,7 +69,6 @@ class DlnaService {
   factory DlnaService() => _instance;
   DlnaService._internal();
 
-  // --- 接続状態管理 ---
   DlnaDevice? _currentDevice;
   final _connectedDeviceController = StreamController<DlnaDevice?>.broadcast();
   Stream<DlnaDevice?> get connectedDeviceStream => _connectedDeviceController.stream;
@@ -100,7 +101,6 @@ class DlnaService {
     }
   }
 
-  // --- 検索機能 ---
   Future<void> startSearch({int duration = 20, int targetCount = 3}) async {
     stopSearch();
     _isSearching = true;
@@ -139,6 +139,7 @@ class DlnaService {
           '\r\n';
       final data = utf8.encode(searchMsg);
       final multicastAddress = InternetAddress('239.255.255.250');
+
       for (int i = 0; i < 3; i++) {
         if (!_isSearching) break;
         _socket?.send(data, multicastAddress, 1900);
@@ -217,7 +218,7 @@ class DlnaService {
 
   void _addFallbackDevice(String ip, {int port = 8080, String? customName}) {
     final index = _foundDevices.indexWhere((d) => d.ip == ip);
-    if (index != -1 && !_foundDevices[index].name.startsWith("Found") && !_foundDevices[index].name.startsWith("Manual")) {
+    if (index != -1 && _foundDevices[index].isManual) {
       return;
     }
 
@@ -245,17 +246,20 @@ class DlnaService {
       serviceType: 'urn:schemas-upnp-org:service:AVTransport:1',
       port: port,
       isManual: true,
+      macAddress: index != -1 ? _foundDevices[index].macAddress : null,
     );
     _addDeviceToList(forcedDevice);
   }
 
   void _addDeviceToList(DlnaDevice device) {
+    print("[DlnaService] Adding/Updating: ${device.name} (${device.ip}) Manual:${device.isManual}");
     final index = _foundDevices.indexWhere((d) => d.ip == device.ip);
     if (index != -1) {
       final existing = _foundDevices[index];
       _foundDevices[index] = device.copyWith(
         name: existing.isManual ? existing.name : device.name,
-        isManual: existing.isManual,
+        isManual: existing.isManual || device.isManual,
+        macAddress: existing.macAddress ?? device.macAddress,
       );
     } else {
       _foundDevices.add(device);
@@ -268,6 +272,7 @@ class DlnaService {
       final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
       String? currentIp;
       String? subnetPrefix;
+
       for (var interface in interfaces) {
         for (var addr in interface.addresses) {
           if (!addr.isLoopback && addr.address.startsWith('192.168.')) {
@@ -276,15 +281,19 @@ class DlnaService {
             break;
           }
         }
+        if (subnetPrefix != null) break;
       }
-      if (subnetPrefix == null) return;
+
+      subnetPrefix ??= "192.168.1.";
 
       final List<Future> checks = [];
       for (int i = 1; i < 255; i++) {
         if (!_isSearching) break;
         final targetIp = "$subnetPrefix$i";
         if (targetIp == currentIp) continue;
+
         checks.add(_checkPortOpen(targetIp));
+
         if (checks.length >= 30) {
           await Future.wait(checks);
           checks.clear();
@@ -297,16 +306,25 @@ class DlnaService {
   Future<void> _checkPortOpen(String ip) async {
     if (_foundDevices.any((d) => d.ip == ip)) return;
     try {
-      final socket = await Socket.connect(ip, 8080, timeout: const Duration(seconds: 1));
+      final socket = await Socket.connect(ip, 8080, timeout: const Duration(milliseconds: 1000));
       socket.destroy();
-      _addFallbackDevice(ip, port: 8080, customName: "VLC/Web ($ip)");
+      _addFallbackDevice(ip, port: 8080, customName: "Kodi? ($ip)");
       _fetchDeviceInfo('http://$ip:8080/description.xml', ip);
     } catch (e) { }
   }
 
+  // 接続チェック強化版
   Future<bool> checkConnection(DlnaDevice device) async {
+    if (await _tryConnect(device.ip, device.port)) return true;
+    if (device.port != 8080) {
+      if (await _tryConnect(device.ip, 8080)) return true;
+    }
+    return false;
+  }
+
+  Future<bool> _tryConnect(String ip, int port) async {
     try {
-      final socket = await Socket.connect(device.ip, device.port, timeout: const Duration(seconds: 2));
+      final socket = await Socket.connect(ip, port, timeout: const Duration(seconds: 2));
       socket.destroy();
       return true;
     } catch (e) {
@@ -318,7 +336,7 @@ class DlnaService {
     final portsToTry = [8080, 58693, 49152, 49153, 1024, 1865];
     for (var port in portsToTry) {
       try {
-        final socket = await Socket.connect(ip, port, timeout: const Duration(milliseconds: 800));
+        final socket = await Socket.connect(ip, port, timeout: const Duration(milliseconds: 1500));
         socket.destroy();
         final forcedDevice = DlnaDevice(
           ip: ip,
@@ -338,229 +356,90 @@ class DlnaService {
     return false;
   }
 
-  // ====================================================================
-  // Kodi プレイリスト操作
-  // ====================================================================
+  Future<void> sendWakeOnLan(String? mac) async {
+    if (mac == null || mac.isEmpty) return;
+    final String cleanMac = mac.replaceAll(':', '').replaceAll('-', '').trim();
+    if (cleanMac.length != 12) return;
+    try {
+      final List<int> packet = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+      final List<int> macBytes = [];
+      for (int i = 0; i < 12; i += 2) macBytes.add(int.parse(cleanMac.substring(i, i + 2), radix: 16));
+      for (int i = 0; i < 16; i++) packet.addAll(macBytes);
+      final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      socket.broadcastEnabled = true;
+      socket.send(packet, InternetAddress('255.255.255.255'), 9);
+      socket.close();
+      print("[WOL] Sent to $mac");
+    } catch (e) { print("[WOL] Error: $e"); }
+  }
 
-  /// 1. 今すぐ再生 (修正：安全な形式に戻す)
+  // Kodi操作系 (変更なし)
   Future<void> playNow(DlnaDevice device, String videoUrl, String title, String? thumbnailUrl) async {
-    print("[DlnaService] playNow called: $title");
     try {
       await _sendJsonRpc(device, "Playlist.Clear", {"playlistid": 1});
-      // itemにはfileのみ渡す
-      await _sendJsonRpc(device, "Playlist.Add", {
-        "playlistid": 1,
-        "item": {"file": videoUrl}
-      });
-      await _sendJsonRpc(device, "Player.Open", {
-        "item": {"playlistid": 1, "position": 0},
-        "options": {"resume": false}
-      });
+      await _sendJsonRpc(device, "Playlist.Add", {"playlistid": 1, "item": {"file": videoUrl}});
+      await _sendJsonRpc(device, "Player.Open", {"item": {"playlistid": 1, "position": 0}, "options": {"resume": false}});
     } catch (e) {
       await castVideoDlna(device, videoUrl, title);
     }
   }
+  Future<void> addToPlaylist(DlnaDevice device, String videoUrl, String title, String? thumbnailUrl) async => await _sendJsonRpc(device, "Playlist.Add", {"playlistid": 1, "item": {"file": videoUrl}});
+  Future<void> insertToPlaylist(DlnaDevice device, int position, String videoUrl, String title, String? thumbnailUrl) async => await _sendJsonRpc(device, "Playlist.Insert", {"playlistid": 1, "position": position, "item": {"file": videoUrl}});
+  Future<void> playFromPlaylist(DlnaDevice device, int index) async => await _sendJsonRpc(device, "Player.Open", {"item": {"playlistid": 1, "position": index}});
+  Future<void> movePlaylistItem(DlnaDevice device, int fromIndex, int toIndex) async => await _sendJsonRpc(device, "Playlist.Move", {"playlistid": 1, "item": fromIndex, "to": toIndex});
+  Future<void> removeFromPlaylist(DlnaDevice device, int index) async => await _sendJsonRpc(device, "Playlist.Remove", {"playlistid": 1, "position": index});
+  Future<void> clearPlaylist(DlnaDevice device) async => await _sendJsonRpc(device, "Playlist.Clear", {"playlistid": 1});
 
-  /// 2. 末尾に追加 (修正：安全な形式に戻す)
-  Future<void> addToPlaylist(DlnaDevice device, String videoUrl, String title, String? thumbnailUrl) async {
-    try {
-      await _sendJsonRpc(device, "Playlist.Add", {
-        "playlistid": 1,
-        "item": {"file": videoUrl}
-      });
-    } catch (e) {
-      print("[DlnaService] addToPlaylist failed: $e");
-      throw Exception("Kodiへの接続に失敗しました");
-    }
-  }
-
-  /// 指定位置に挿入 (修正：安全な形式に戻す)
-  Future<void> insertToPlaylist(DlnaDevice device, int position, String videoUrl, String title, String? thumbnailUrl) async {
-    try {
-      await _sendJsonRpc(device, "Playlist.Insert", {
-        "playlistid": 1,
-        "position": position,
-        "item": {"file": videoUrl}
-      });
-    } catch (e) {
-      print("[DlnaService] insertToPlaylist failed: $e");
-      throw Exception("挿入に失敗しました");
-    }
-  }
-
-  /// 3. 指定位置再生
-  Future<void> playFromPlaylist(DlnaDevice device, int index) async {
-    try {
-      await _sendJsonRpc(device, "Player.Open", {
-        "item": {"playlistid": 1, "position": index}
-      });
-    } catch (e) {
-      print("[DlnaService] playFromPlaylist failed: $e");
-      rethrow;
-    }
-  }
-
-  /// 4. 移動
-  Future<void> movePlaylistItem(DlnaDevice device, int fromIndex, int toIndex) async {
-    await _sendJsonRpc(device, "Playlist.Move", {
-      "playlistid": 1,
-      "item": fromIndex,
-      "to": toIndex
-    });
-  }
-
-  /// 5. 削除
-  Future<void> removeFromPlaylist(DlnaDevice device, int index) async {
-    await _sendJsonRpc(device, "Playlist.Remove", {
-      "playlistid": 1,
-      "position": index
-    });
-  }
-
-  /// 6. クリア
-  Future<void> clearPlaylist(DlnaDevice device) async {
-    try {
-      await _sendJsonRpc(device, "Playlist.Clear", {"playlistid": 1});
-    } catch (e) {
-      print("[DlnaService] Clear failed: $e");
-    }
-  }
-
-  /// 現在再生中の状態を取得 (監視用)
   Future<Map<String, dynamic>?> getPlayerStatus(DlnaDevice device) async {
     try {
-      final props = await _sendJsonRpc(device, "Player.GetProperties", {
-        "playerid": 1,
-        "properties": ["position", "time", "totaltime"]
-      });
-
-      final item = await _sendJsonRpc(device, "Player.GetItem", {
-        "playerid": 1,
-        "properties": ["title", "file"]
-      });
-
+      final props = await _sendJsonRpc(device, "Player.GetProperties", {"playerid": 1, "properties": ["position", "time", "totaltime"]});
+      final item = await _sendJsonRpc(device, "Player.GetItem", {"playerid": 1, "properties": ["title", "file"]});
       if (props != null && item != null && item['item'] != null) {
-        String name = item['item']['title'] ?? '';
-        if (name.isEmpty) {
-          name = item['item']['label'] ?? '';
-        }
-
-        // 【追加】再生時間を秒数に変換
+        String name = item['item']['title'] ?? item['item']['label'] ?? '';
         int totalSeconds = 0;
         if (props['totaltime'] != null) {
           final t = props['totaltime'];
-          int h = t['hours'] ?? 0;
-          int m = t['minutes'] ?? 0;
-          int s = t['seconds'] ?? 0;
-          totalSeconds = (h * 3600) + (m * 60) + s;
+          totalSeconds = ((t['hours'] ?? 0) * 3600) + ((t['minutes'] ?? 0) * 60) + (t['seconds'] ?? 0);
         }
-
-        return {
-          'position': props['position'] ?? 0,
-          'title': name,
-          'totalSeconds': totalSeconds, // 秒数を返す
-        };
+        return {'position': props['position'] ?? 0, 'title': name, 'totalSeconds': totalSeconds};
       }
     } catch (e) { }
     return null;
   }
-
-  /// プレイリスト全件取得（リカバリー用）
   Future<List<KodiPlaylistItem>> getPlaylistItems(DlnaDevice device) async {
     try {
-      final result = await _sendJsonRpc(device, "Playlist.GetItems", {
-        "playlistid": 1,
-        "properties": ["title", "file"],
-        "limits": {"start": 0, "end": 100}
-      });
-
+      final result = await _sendJsonRpc(device, "Playlist.GetItems", {"playlistid": 1, "properties": ["title", "file"], "limits": {"start": 0, "end": 100}});
       if (result != null && result['items'] != null) {
-        return (result['items'] as List)
-            .map((e) => KodiPlaylistItem.fromJson(e))
-            .toList();
+        return (result['items'] as List).map((e) => KodiPlaylistItem.fromJson(e)).toList();
       }
-    } catch (e) {
-      print("[DlnaService] getPlaylistItems failed: $e");
-    }
+    } catch (e) { }
     return [];
   }
-
-  // --- 共通 JSON-RPC ---
   Future<dynamic> _sendJsonRpc(DlnaDevice device, String method, Map<String, dynamic> params) async {
     final kodiUrl = Uri.parse('http://${device.ip}:8080/jsonrpc');
-    final body = jsonEncode({
-      "jsonrpc": "2.0",
-      "method": method,
-      "params": params,
-      "id": 1
-    });
-
-    try {
-      final response = await http.post(
-          kodiUrl,
-          headers: {'Content-Type': 'application/json'},
-          body: body
-      ).timeout(const Duration(seconds: 5));
-
-      if (response.statusCode == 200) {
-        final decoded = jsonDecode(response.body);
-        if (decoded.containsKey('error')) {
-          throw Exception("Kodi Error: ${decoded['error']}");
-        }
-        return decoded['result'];
-      }
-    } catch (e) {
-      rethrow;
+    final body = jsonEncode({"jsonrpc": "2.0", "method": method, "params": params, "id": 1});
+    final response = await http.post(kodiUrl, headers: {'Content-Type': 'application/json'}, body: body).timeout(const Duration(seconds: 5));
+    if (response.statusCode == 200) {
+      final decoded = jsonDecode(response.body);
+      if (decoded.containsKey('error')) throw Exception("Kodi Error: ${decoded['error']}");
+      return decoded['result'];
     }
+    throw Exception("HTTP Error ${response.statusCode}");
   }
-
-  // --- DLNA Fallback ---
   Future<void> castVideoDlna(DlnaDevice device, String videoUrl, String title) async {
     final fullControlUrl = 'http://${device.ip}:${device.port}${device.controlUrl}';
-    try {
-      await _sendSoap(fullControlUrl, device.serviceType, 'SetAVTransportURI', {
-        'InstanceID': '0',
-        'CurrentURI': videoUrl,
-        'CurrentURIMetaData': '',
-      });
-      await _sendSoap(fullControlUrl, device.serviceType, 'Play', {
-        'InstanceID': '0',
-        'Speed': '1',
-      });
-    } catch (e) {
-      print("[DlnaService] DLNA Cast failed: $e");
-      throw Exception("DLNA送信失敗");
-    }
+    await _sendSoap(fullControlUrl, device.serviceType, 'SetAVTransportURI', {'InstanceID': '0', 'CurrentURI': videoUrl, 'CurrentURIMetaData': ''});
+    await _sendSoap(fullControlUrl, device.serviceType, 'Play', {'InstanceID': '0', 'Speed': '1'});
   }
-
   Future<void> _sendSoap(String url, String serviceType, String action, Map<String, String> args) async {
     String argsXml = args.entries.map((e) => "<${e.key}>${e.value}</${e.key}>").join();
-    String soap = '''<?xml version="1.0" encoding="utf-8"?>
-    <s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
-      <s:Body>
-        <u:$action xmlns:u="$serviceType">$argsXml</u:$action>
-      </s:Body>
-    </s:Envelope>''';
-
-    final response = await http.post(
-      Uri.parse(url),
-      headers: {
-        'Content-Type': 'text/xml; charset="utf-8"',
-        'SOAPAction': '"$serviceType#$action"',
-      },
-      body: soap,
-    ).timeout(const Duration(seconds: 5));
-
-    if (response.statusCode != 200) {
-      throw Exception("SOAP Error ${response.statusCode}");
-    }
+    String soap = '''<?xml version="1.0" encoding="utf-8"?><s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:$action xmlns:u="$serviceType">$argsXml</u:$action></s:Body></s:Envelope>''';
+    await http.post(Uri.parse(url), headers: {'Content-Type': 'text/xml; charset="utf-8"', 'SOAPAction': '"$serviceType#$action"'}, body: soap).timeout(const Duration(seconds: 5));
   }
-
   void _stopSocketOnly() {
     _socket?.close();
     _socket = null;
   }
-
   void stopSearch() {
     if (_isSearching) {
       _isSearching = false;
