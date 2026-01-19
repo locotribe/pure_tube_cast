@@ -4,7 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/dlna_service.dart';
-import '../services/adb_service.dart';
+// 【削除】ADBサービスのインポートを削除
+// import '../services/adb_service.dart';
 
 class DeviceView extends StatefulWidget {
   const DeviceView({super.key});
@@ -183,33 +184,7 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
     await _dlnaService.sendWakeOnLan(device.macAddress);
   }
 
-  // ■■■■■ ADB起動のみ ■■■■■
-  Future<void> _launchKodiOnly(DlnaDevice device) async {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Kodi起動コマンドを送信しています(ADB)...")),
-    );
-
-    final success = await AdbService().launchKodi(device.ip);
-
-    if (success) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("起動コマンドを送信しました")),
-      );
-    } else {
-      showDialog(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text("接続できませんでした"),
-          content: const Text(
-            "Fire TVへの接続が拒否されました。\n"
-                "Fire TVの設定で「ADBデバッグ」を一度オフにして、再度オンに切り替えてください。\n"
-                "その後、画面に出る「許可」を押してください。",
-          ),
-          actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text("OK"))],
-        ),
-      );
-    }
-  }
+  // 【削除】_launchKodiOnly メソッドを完全に削除
 
   void _showRenameDialog(DlnaDevice device) {
     final TextEditingController nameController = TextEditingController(text: device.name);
@@ -448,7 +423,8 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
                             ),
                           ),
 
-                          // ADBボタン
+                          // 【削除】ADB起動ボタンを削除
+                          /*
                           Tooltip(
                             message: "Kodiを起動 (ADB)",
                             child: ElevatedButton.icon(
@@ -463,6 +439,7 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
                               ),
                             ),
                           ),
+                          */
 
                           // 編集・削除
                           Row(
@@ -491,7 +468,7 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
   }
 }
 
-// MACアドレス整形フォーマッター
+// MACアドレス整形フォーマッター (変更なし)
 class _MacAddressFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(
