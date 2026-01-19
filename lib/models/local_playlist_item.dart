@@ -7,10 +7,13 @@ class LocalPlaylistItem {
   final String? streamUrl;
 
   // 状態フラグ
-  final bool isResolving; // 解析中
-  final bool hasError;    // エラー
-  final bool isQueued;    // 送信済み
-  final bool isPlaying;   // 【追加】再生中
+  final bool isResolving;
+  final bool hasError;
+  final bool isQueued;
+  final bool isPlaying;
+
+  // 【追加】重複防止用の静的カウンター
+  static int _idCounter = 0;
 
   LocalPlaylistItem({
     String? id,
@@ -22,8 +25,9 @@ class LocalPlaylistItem {
     this.isResolving = false,
     this.hasError = false,
     this.isQueued = false,
-    this.isPlaying = false, // 【追加】初期値false
-  }) : id = id ?? DateTime.now().millisecondsSinceEpoch.toString();
+    this.isPlaying = false,
+    // 【修正】ミリ秒 + カウンター で完全にユニークなIDを作る
+  }) : id = id ?? "${DateTime.now().millisecondsSinceEpoch}_${_idCounter++}";
 
   LocalPlaylistItem copyWith({
     String? title,
@@ -34,10 +38,10 @@ class LocalPlaylistItem {
     bool? isResolving,
     bool? hasError,
     bool? isQueued,
-    bool? isPlaying, // 【追加】
+    bool? isPlaying,
   }) {
     return LocalPlaylistItem(
-      id: id,
+      id: id, // IDはコピー元を維持
       title: title ?? this.title,
       originalUrl: originalUrl ?? this.originalUrl,
       thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
@@ -46,10 +50,11 @@ class LocalPlaylistItem {
       isResolving: isResolving ?? this.isResolving,
       hasError: hasError ?? this.hasError,
       isQueued: isQueued ?? this.isQueued,
-      isPlaying: isPlaying ?? this.isPlaying, // 【追加】
+      isPlaying: isPlaying ?? this.isPlaying,
     );
   }
 
+  // ... (toJson, fromJson は変更なし) ...
   Map<String, dynamic> toJson() {
     return {
       'id': id,
@@ -60,7 +65,6 @@ class LocalPlaylistItem {
       'streamUrl': streamUrl,
       'isResolving': isResolving,
       'hasError': hasError,
-      // isQueued, isPlaying は一時的な状態なので保存しない
     };
   }
 

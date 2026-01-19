@@ -511,29 +511,81 @@ class PlaylistManager {
     }
   }
 
+// ==========================================================
+  //  プレイリスト取り込み & 順次解析ロジック
+  // ==========================================================
+
   Future<String?> importFromYoutubePlaylist(String url) async {
     try {
+      // 前回修正した件数制限(.take(50)など)を含んだコードを想定
       final info = await _ytService.fetchPlaylistInfo(url);
       if (info == null) return null;
+
       final String title = info['title'] ?? "YouTube Playlist";
       final List itemsData = info['items'] ?? [];
+
       final newPlaylistId = DateTime.now().millisecondsSinceEpoch.toString();
       final newPlaylist = PlaylistModel(id: newPlaylistId, name: title, items: []);
+
+      // 【修正1】ID重複防止 と 初期状態を「解析中(true)」ではなく「待機(false)」にする
+      int counter = 0;
+      final baseId = DateTime.now().millisecondsSinceEpoch;
+
       for (var item in itemsData) {
         newPlaylist.items.add(LocalPlaylistItem(
+          id: "${baseId}_${counter++}", // ID重複回避
           title: item['title'],
           originalUrl: item['url'],
           thumbnailUrl: item['thumbnailUrl'],
           durationStr: item['duration'],
-          isResolving: true,
+          isResolving: false, // 【変更】最初は false (解析中アイコンを出さない)
         ));
       }
+
       _playlists.add(newPlaylist);
       await _saveToStorage();
+
+      // 【追加】バックグラウンドで順次解析を開始
+      _startBackgroundResolution(newPlaylistId, limit: 10);
+
       return newPlaylistId;
     } catch (e) {
       print("[Manager] Import failed: $e");
       return null;
+    }
+  }
+
+  /// 【修正】limit引数を追加 (デフォルトは -1 で無制限)
+  void _startBackgroundResolution(String playlistId, {int limit = -1}) async {
+    print("[Manager] Starting background resolution for: $playlistId (Limit: $limit)");
+
+    int resolvedCount = 0; // 解析した回数をカウント
+
+    while (true) {
+      // 【追加】制限回数に達したらループを抜ける
+      if (limit != -1 && resolvedCount >= limit) {
+        print("[Manager] Reached resolution limit ($limit). Stopping background task.");
+        break;
+      }
+
+      final pIndex = _playlists.indexWhere((p) => p.id == playlistId);
+      if (pIndex == -1) break;
+
+      final items = _playlists[pIndex].items;
+      final targetIndex = items.indexWhere((i) => i.streamUrl == null && !i.hasError && !i.isResolving);
+
+      if (targetIndex == -1) break;
+
+      final targetItem = items[targetIndex];
+
+      try {
+        await ensureStreamUrl(playlistId, targetItem.id);
+        resolvedCount++; // カウントアップ
+      } catch (e) {
+        print("[Manager] Resolution error: $e");
+      }
+
+      await Future.delayed(const Duration(milliseconds: 1000));
     }
   }
 
