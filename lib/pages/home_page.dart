@@ -275,10 +275,13 @@ class _HomePageState extends State<HomePage> {
           Expanded(
             child: IndexedStack(
               index: _selectedIndex,
-              children: const [
-                WebVideoView(),
-                LibraryView(),
-                DeviceView(),
+              children: [
+                // 0: 動画サイト (常に保持)
+                const WebVideoView(),
+                // 1: ライブラリ (常に保持)
+                const LibraryView(),
+                // 2: 接続 (選択時のみビルドすることで、タブを押した時に検索開始、離れたら停止させる)
+                _selectedIndex == 2 ? const DeviceView() : const SizedBox(),
               ],
             ),
           ),

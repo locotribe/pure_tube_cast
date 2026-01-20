@@ -36,22 +36,31 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  // ■■■■■ 接続確認 ■■■■■
-  Future<void> _testConnection(DlnaDevice device) async {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("接続を確認しています..."), duration: Duration(milliseconds: 500)),
-    );
-    final isConnected = await _logic.checkConnection(device);
-    if (mounted) {
-      if (isConnected) {
-        _logic.setSelectDevice(device);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("${device.name} に接続しました")),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("接続できませんでした。Kodiが起動していない可能性があります。"), backgroundColor: Colors.orange),
-        );
+  // ■■■■■ 接続/切断のトグル ■■■■■
+  Future<void> _onDeviceTap(DlnaDevice device, bool isConnected) async {
+    if (isConnected) {
+      // 接続解除
+      _logic.disconnect();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("接続を解除しました")),
+      );
+    } else {
+      // 接続確認
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("接続を確認しています..."), duration: Duration(milliseconds: 500)),
+      );
+      final success = await _logic.checkConnection(device);
+      if (mounted) {
+        if (success) {
+          _logic.setSelectDevice(device);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("${device.name} に接続しました")),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("接続できませんでした。Kodiが起動していない可能性があります。"), backgroundColor: Colors.orange),
+          );
+        }
       }
     }
   }
@@ -112,7 +121,7 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
               await _logic.updateDeviceSettings(device, newName, newMac);
 
               if (mounted) Navigator.pop(context);
-              // 設定反映のため再検索（ロジック側で更新されるが念のため）
+              // 設定反映のため再検索
               _logic.startSearch();
             },
             child: const Text("保存"),
@@ -189,7 +198,6 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              // 検索ステータスと台数表示
               ValueListenableBuilder<bool>(
                 valueListenable: _logic.isSearching,
                 builder: (context, isSearching, child) {
@@ -234,7 +242,6 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
                 return const Center(child: Text("デバイスが見つかりません"));
               }
 
-              // 接続中デバイスの監視
               return StreamBuilder<DlnaDevice?>(
                 stream: _logic.connectedDeviceStream,
                 initialData: _logic.currentConnectedDevice,
@@ -257,22 +264,20 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              // --- 上段：情報エリア（タップで接続確認） ---
+                              // --- 上段：情報エリア（タップで接続/切断） ---
                               InkWell(
-                                onTap: () => _testConnection(device),
+                                onTap: () => _onDeviceTap(device, isConnected), // 【変更】
                                 child: Row(
                                   children: [
                                     Expanded(
                                       child: Column(
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
-                                          // デバイス名
                                           Text(
                                             device.name,
                                             style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                                           ),
                                           const SizedBox(height: 4),
-                                          // IPアドレスとMACアドレスを横並びで
                                           Wrap(
                                             spacing: 12.0,
                                             children: [
@@ -306,11 +311,10 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
 
                               const Divider(),
 
-                              // --- 下段：操作ボタンエリア ---
+                              // --- 下段：操作ボタン ---
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                 children: [
-                                  // WOLボタン
                                   Tooltip(
                                     message: "WOL (起動信号) を送信",
                                     child: ElevatedButton.icon(
@@ -325,8 +329,6 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
                                       ),
                                     ),
                                   ),
-
-                                  // 編集・削除
                                   Row(
                                     children: [
                                       IconButton(
@@ -357,7 +359,6 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
   }
 }
 
-// MACアドレス整形フォーマッター (UI補助のためViewに残す)
 class _MacAddressFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(
@@ -365,14 +366,12 @@ class _MacAddressFormatter extends TextInputFormatter {
     if (newValue.text.length < oldValue.text.length) {
       return newValue;
     }
-    // 数字とA-F以外を除去
     final text = newValue.text.replaceAll(RegExp(r'[^0-9a-fA-F]'), '').toUpperCase();
     if (text.length > 12) return oldValue;
 
     final buffer = StringBuffer();
     for (int i = 0; i < text.length; i++) {
       buffer.write(text[i]);
-      // 2文字ごとにコロンを入れる
       var nonZeroIndex = i + 1;
       if (nonZeroIndex % 2 == 0 && nonZeroIndex != text.length) {
         buffer.write(':');

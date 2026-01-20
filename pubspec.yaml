@@ -22,6 +22,9 @@ dependencies:
   url_launcher: ^6.2.0
   html: ^0.15.4
 
+  # 追加: デバイス名検出用 (mDNS)
+  multicast_dns: ^0.3.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
