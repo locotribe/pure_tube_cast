@@ -9,7 +9,8 @@ class VideoResolver {
   Future<Map<String, dynamic>?> resolveMetadata(String url) async {
     if (_isYoutubeUrl(url)) {
       print("[Resolver] Detected YouTube URL");
-      return await _ytService.fetchMetadata(url);
+      // fetchMetadata -> getVideoDetails に変更
+      return await _ytService.getVideoDetails(url);
     } else {
       print("[Resolver] Detected Web URL");
       return await _webService.fetchMetadata(url);
@@ -29,7 +30,8 @@ class VideoResolver {
     }
 
     if (_isYoutubeUrl(url)) {
-      return await _ytService.fetchStreamUrl(url);
+      // fetchStreamUrl -> getStreamUrl に変更
+      return await _ytService.getStreamUrl(url);
     }
 
     // ここに来る＝Webサイトだが解析時に動画URLが見つからなかった場合

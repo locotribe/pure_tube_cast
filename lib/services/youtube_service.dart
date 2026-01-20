@@ -3,63 +3,75 @@ import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 class YoutubeService {
   final YoutubeExplode _yt = YoutubeExplode();
 
-  /// 動画メタデータの取得 (既存)
-  Future<Map<String, dynamic>?> fetchMetadata(String url) async {
+  // --- Playlist Methods ---
+
+  /// プレイリスト詳細（タイトルなど）を取得
+  Future<Map<String, dynamic>?> getPlaylistDetails(String playlistId) async {
+    try {
+      final playlist = await _yt.playlists.get(playlistId);
+      return {
+        'title': playlist.title,
+        'author': playlist.author,
+        'thumbnail': playlist.thumbnails.highResUrl,
+      };
+    } catch (e) {
+      print("[YoutubeService] Playlist Error: $e");
+      return null;
+    }
+  }
+
+  /// プレイリスト内の動画一覧を取得
+  Future<List<Map<String, dynamic>>> getPlaylistVideos(String playlistId) async {
+    final List<Map<String, dynamic>> videos = [];
+    try {
+      await for (final video in _yt.playlists.getVideos(playlistId).take(50)) {
+        videos.add({
+          'id': video.id.value,
+          'title': video.title,
+          'thumbnail': video.thumbnails.highResUrl,
+          'duration': _formatDuration(video.duration),
+        });
+      }
+    } catch (e) {
+      print("[YoutubeService] Video List Error: $e");
+    }
+    return videos;
+  }
+
+  // --- Video Methods ---
+
+  /// 【追加】単体動画のメタデータ取得 (VideoResolverで使用)
+  Future<Map<String, dynamic>?> getVideoDetails(String url) async {
     try {
       final videoId = VideoId(url);
       final video = await _yt.videos.get(videoId);
-      String durationStr = _formatDuration(video.duration);
-
       return {
         'id': video.id.value,
         'url': url,
         'title': video.title,
         'thumbnailUrl': video.thumbnails.highResUrl,
-        'duration': durationStr,
+        'duration': _formatDuration(video.duration),
       };
     } catch (e) {
-      print("[DEBUG] Metadata Fetch Error: $e");
+      print("[YoutubeService] Metadata Error: $e");
       return null;
     }
   }
 
-  /// 【追加】プレイリスト情報の取得
-  Future<Map<String, dynamic>?> fetchPlaylistInfo(String url) async {
+  /// ストリームURLの解決
+  Future<String?> getStreamUrl(String videoUrl) async {
     try {
-      final playlistId = PlaylistId(url);
-
-      // プレイリストの情報を取得
-      final playlist = await _yt.playlists.get(playlistId);
-
-      // 動画一覧を取得 (最大200件まで取得するように制限しても良いですが、一旦全件取得します)
-      final videos = await _yt.playlists.getVideos(playlistId).toList();
-
-      return {
-        'title': playlist.title,
-        'items': videos.map((v) => {
-          'title': v.title,
-          'url': v.url,
-          'thumbnailUrl': v.thumbnails.highResUrl,
-          'duration': _formatDuration(v.duration),
-        }).toList(),
-      };
-    } catch (e) {
-      print("[DEBUG] Playlist Fetch Error: $e");
-      return null;
-    }
-  }
-
-  /// ストリームURLの取得 (既存)
-  Future<String?> fetchStreamUrl(String url) async {
-    try {
-      final videoId = VideoId(url);
+      final videoId = VideoId(videoUrl);
       final manifest = await _yt.videos.streamsClient.getManifest(videoId);
       final streamInfo = manifest.muxed.withHighestBitrate();
       return streamInfo.url.toString();
     } catch (e) {
+      print("[YoutubeService] Stream Error: $e");
       return null;
     }
   }
+
+  // --- Helper ---
 
   String _formatDuration(Duration? d) {
     if (d == null) return "--:--";

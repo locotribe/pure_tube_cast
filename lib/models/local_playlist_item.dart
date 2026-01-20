@@ -1,85 +1,51 @@
 class LocalPlaylistItem {
   final String id;
-  final String title;
+  String title;
   final String originalUrl;
-  final String? thumbnailUrl;
-  final String durationStr;
-  final String? streamUrl;
+  String? streamUrl; // 追加
+  String? thumbnailUrl;
+  String durationStr;
 
-  // 状態フラグ
-  final bool isResolving;
-  final bool hasError;
-  final bool isQueued;
-  final bool isPlaying;
-
-  // 【追加】重複防止用の静的カウンター
-  static int _idCounter = 0;
+  // 状態管理用フィールド (finalを外して書き換え可能にする)
+  bool isPlaying;
+  bool isQueued;
+  bool isResolving;
+  bool hasError; // 追加
+  DateTime lastResolved; // 追加
 
   LocalPlaylistItem({
-    String? id,
+    required this.id,
     required this.title,
     required this.originalUrl,
-    this.thumbnailUrl,
-    required this.durationStr,
     this.streamUrl,
+    this.thumbnailUrl,
+    this.durationStr = "",
+    this.isPlaying = false,
+    this.isQueued = false,
     this.isResolving = false,
     this.hasError = false,
-    this.isQueued = false,
-    this.isPlaying = false,
-    // 【修正】ミリ秒 + カウンター で完全にユニークなIDを作る
-  }) : id = id ?? "${DateTime.now().millisecondsSinceEpoch}_${_idCounter++}";
+    DateTime? lastResolved,
+  }) : lastResolved = lastResolved ?? DateTime.fromMillisecondsSinceEpoch(0);
 
-  LocalPlaylistItem copyWith({
-    String? title,
-    String? originalUrl,
-    String? thumbnailUrl,
-    String? durationStr,
-    String? streamUrl,
-    bool? isResolving,
-    bool? hasError,
-    bool? isQueued,
-    bool? isPlaying,
-  }) {
-    return LocalPlaylistItem(
-      id: id, // IDはコピー元を維持
-      title: title ?? this.title,
-      originalUrl: originalUrl ?? this.originalUrl,
-      thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
-      durationStr: durationStr ?? this.durationStr,
-      streamUrl: streamUrl ?? this.streamUrl,
-      isResolving: isResolving ?? this.isResolving,
-      hasError: hasError ?? this.hasError,
-      isQueued: isQueued ?? this.isQueued,
-      isPlaying: isPlaying ?? this.isPlaying,
-    );
-  }
-
-  // ... (toJson, fromJson は変更なし) ...
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'title': title,
-      'originalUrl': originalUrl,
-      'thumbnailUrl': thumbnailUrl,
-      'durationStr': durationStr,
-      'streamUrl': streamUrl,
-      'isResolving': isResolving,
-      'hasError': hasError,
-    };
-  }
+  // JSON変換
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'title': title,
+    'originalUrl': originalUrl,
+    'streamUrl': streamUrl,
+    'thumbnailUrl': thumbnailUrl,
+    'durationStr': durationStr,
+    // 状態系は保存しない（起動時にリセットされるため）
+  };
 
   factory LocalPlaylistItem.fromJson(Map<String, dynamic> json) {
     return LocalPlaylistItem(
-      id: json['id'],
-      title: json['title'],
-      originalUrl: json['originalUrl'],
+      id: json['id'] ?? '',
+      title: json['title'] ?? 'No Title',
+      originalUrl: json['originalUrl'] ?? '',
+      streamUrl: json['streamUrl'], // キャッシュがあれば復元しても良い
       thumbnailUrl: json['thumbnailUrl'],
-      durationStr: json['durationStr'] ?? "--:--",
-      streamUrl: json['streamUrl'],
-      isResolving: json['isResolving'] ?? false,
-      hasError: json['hasError'] ?? false,
-      isQueued: false,
-      isPlaying: false,
+      durationStr: json['durationStr'] ?? '',
     );
   }
 }

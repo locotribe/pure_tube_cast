@@ -1,11 +1,7 @@
-import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../services/dlna_service.dart';
-// 【削除】ADBサービスのインポートを削除
-// import '../services/adb_service.dart';
+import '../logics/device_view_logic.dart'; // ロジッククラス
 
 class DeviceView extends StatefulWidget {
   const DeviceView({super.key});
@@ -15,150 +11,40 @@ class DeviceView extends StatefulWidget {
 }
 
 class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
-  final DlnaService _dlnaService = DlnaService();
-
-  List<DlnaDevice> _devices = [];
-  bool _isSearching = false;
-  Map<String, String> _customNames = {};
-  Map<String, String> _customMacs = {};
-  String? _selectedDeviceIp;
-
-  late StreamSubscription _deviceListSubscription;
-  Timer? _searchTimeoutDisplayTimer;
-
-  final int _searchDurationSec = 15;
+  final DeviceViewLogic _logic = DeviceViewLogic();
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    if (_dlnaService.currentDevice != null) {
-      _selectedDeviceIp = _dlnaService.currentDevice!.ip;
-    }
-    _loadSettingsAndStart();
-  }
-
-  Future<void> _loadSettingsAndStart() async {
-    await _loadCustomNames();
-    await _loadCustomMacs();
-    await _loadSavedIps();
-    _startDeviceSearch();
-  }
-
-  Future<void> _loadCustomNames() async {
-    final prefs = await SharedPreferences.getInstance();
-    String? jsonStr = prefs.getString('custom_names');
-    if (jsonStr != null) {
-      try {
-        _customNames = Map<String, String>.from(jsonDecode(jsonStr));
-      } catch (e) {}
-    }
-  }
-
-  Future<void> _saveCustomName(String ip, String name) async {
-    final prefs = await SharedPreferences.getInstance();
-    _customNames[ip] = name;
-    await prefs.setString('custom_names', jsonEncode(_customNames));
-  }
-
-  Future<void> _loadCustomMacs() async {
-    final prefs = await SharedPreferences.getInstance();
-    String? jsonStr = prefs.getString('custom_macs');
-    if (jsonStr != null) {
-      try {
-        _customMacs = Map<String, String>.from(jsonDecode(jsonStr));
-      } catch (e) {}
-    }
-  }
-
-  Future<void> _saveCustomMac(String ip, String mac) async {
-    final prefs = await SharedPreferences.getInstance();
-    _customMacs[ip] = mac;
-    await prefs.setString('custom_macs', jsonEncode(_customMacs));
-  }
-
-  Future<void> _loadSavedIps() async {
-    final prefs = await SharedPreferences.getInstance();
-    List<String> ips = prefs.getStringList('saved_ips') ?? [];
-    for (var ip in ips) {
-      String? name = _customNames[ip];
-      _dlnaService.addForcedDevice(ip, customName: name);
-    }
-  }
-
-  Future<void> _addSavedIp(String ip) async {
-    final prefs = await SharedPreferences.getInstance();
-    List<String> ips = prefs.getStringList('saved_ips') ?? [];
-    if (!ips.contains(ip)) {
-      ips.add(ip);
-      await prefs.setStringList('saved_ips', ips);
-    }
-  }
-
-  Future<void> _removeSavedIp(String ip) async {
-    final prefs = await SharedPreferences.getInstance();
-    List<String> ips = prefs.getStringList('saved_ips') ?? [];
-    ips.remove(ip);
-    await prefs.setStringList('saved_ips', ips);
+    _logic.init().then((_) {
+      _logic.startSearch();
+    });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _startDeviceSearch();
+      _logic.startSearch();
     }
-  }
-
-  void _startDeviceSearch() {
-    if (!mounted) return;
-    setState(() => _isSearching = true);
-    _dlnaService.startSearch(duration: _searchDurationSec);
-    _searchTimeoutDisplayTimer?.cancel();
-    _searchTimeoutDisplayTimer = Timer(Duration(seconds: _searchDurationSec), () {
-      if (mounted) setState(() => _isSearching = false);
-    });
-
-    _deviceListSubscription = _dlnaService.deviceStream.listen((devices) {
-      if (mounted) {
-        setState(() {
-          _devices = devices;
-          for (int i = 0; i < _devices.length; i++) {
-            var device = _devices[i];
-            String? savedName = _customNames[device.ip];
-            String? savedMac = _customMacs[device.ip];
-
-            if ((savedName != null && device.name != savedName) ||
-                (savedMac != null && device.macAddress != savedMac)) {
-              _devices[i] = device.copyWith(
-                  name: savedName ?? device.name,
-                  macAddress: savedMac ?? device.macAddress
-              );
-            }
-          }
-        });
-      }
-    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _deviceListSubscription.cancel();
-    _searchTimeoutDisplayTimer?.cancel();
-    _dlnaService.stopSearch();
+    _logic.dispose();
     super.dispose();
   }
 
-  // ■■■■■ 接続確認のみ ■■■■■
+  // ■■■■■ 接続確認 ■■■■■
   Future<void> _testConnection(DlnaDevice device) async {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text("接続を確認しています..."), duration: Duration(milliseconds: 500)),
     );
-    final isConnected = await _dlnaService.checkConnection(device);
+    final isConnected = await _logic.checkConnection(device);
     if (mounted) {
       if (isConnected) {
-        _dlnaService.setDevice(device);
-        setState(() => _selectedDeviceIp = device.ip);
+        _logic.setSelectDevice(device);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("${device.name} に接続しました")),
         );
@@ -170,7 +56,7 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
     }
   }
 
-  // ■■■■■ WOL送信のみ ■■■■■
+  // ■■■■■ WOL送信 ■■■■■
   Future<void> _sendWolOnly(DlnaDevice device) async {
     if (device.macAddress == null || device.macAddress!.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -181,10 +67,8 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text("WOL送信: ${device.macAddress}")),
     );
-    await _dlnaService.sendWakeOnLan(device.macAddress);
+    await _logic.sendWol(device.macAddress!);
   }
-
-  // 【削除】_launchKodiOnly メソッドを完全に削除
 
   void _showRenameDialog(DlnaDevice device) {
     final TextEditingController nameController = TextEditingController(text: device.name);
@@ -203,7 +87,6 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
                 decoration: const InputDecoration(labelText: "表示名", hintText: "リビングのTV"),
               ),
               const SizedBox(height: 16),
-              // MACアドレス入力欄 (自動フォーマット付き)
               TextField(
                 controller: macController,
                 decoration: const InputDecoration(
@@ -226,15 +109,11 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
               final newName = nameController.text.trim();
               final newMac = macController.text.trim();
 
-              if (newName.isNotEmpty) {
-                _dlnaService.updateDeviceName(device.ip, newName);
-                await _saveCustomName(device.ip, newName);
-              }
-              setState(() => _customMacs[device.ip] = newMac);
-              await _saveCustomMac(device.ip, newMac);
+              await _logic.updateDeviceSettings(device, newName, newMac);
 
               if (mounted) Navigator.pop(context);
-              _startDeviceSearch();
+              // 設定反映のため再検索（ロジック側で更新されるが念のため）
+              _logic.startSearch();
             },
             child: const Text("保存"),
           ),
@@ -278,10 +157,8 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
                     final ip = ipController.text.trim();
                     if (ip.isEmpty) return;
                     setStateDialog(() => isVerifying = true);
-                    String? savedName = _customNames[ip];
 
-                    await _dlnaService.verifyAndAddManualDevice(ip, customName: savedName);
-                    await _addSavedIp(ip);
+                    await _logic.addManualIp(ip);
 
                     if (mounted) {
                       Navigator.pop(context);
@@ -298,9 +175,7 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
   }
 
   Future<void> _deleteDevice(DlnaDevice device) async {
-    _dlnaService.removeDevice(device.ip);
-    await _removeSavedIp(device.ip);
-    if (_selectedDeviceIp == device.ip) setState(() => _selectedDeviceIp = null);
+    await _logic.removeDevice(device);
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("${device.name} を削除しました")));
   }
 
@@ -314,18 +189,31 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
-                children: [
-                  _isSearching
-                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Icon(Icons.check_circle, color: Colors.green, size: 20),
-                  const SizedBox(width: 10),
-                  Text(_isSearching ? "検索中..." : "${_devices.length}台 見つかりました"),
-                ],
+              // 検索ステータスと台数表示
+              ValueListenableBuilder<bool>(
+                valueListenable: _logic.isSearching,
+                builder: (context, isSearching, child) {
+                  return StreamBuilder<List<DlnaDevice>>(
+                    stream: _logic.devicesStream,
+                    initialData: const [],
+                    builder: (context, snapshot) {
+                      final count = snapshot.data?.length ?? 0;
+                      return Row(
+                        children: [
+                          isSearching
+                              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                              : const Icon(Icons.check_circle, color: Colors.green, size: 20),
+                          const SizedBox(width: 10),
+                          Text(isSearching ? "検索中..." : "$count台 見つかりました"),
+                        ],
+                      );
+                    },
+                  );
+                },
               ),
               Row(
                 children: [
-                  IconButton(icon: const Icon(Icons.refresh), onPressed: _startDeviceSearch, tooltip: "再検索"),
+                  IconButton(icon: const Icon(Icons.refresh), onPressed: _logic.startSearch, tooltip: "再検索"),
                   IconButton(icon: const Icon(Icons.add), onPressed: _showAddIpDialog, tooltip: "手動追加"),
                 ],
               ),
@@ -336,129 +224,130 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
 
         // --- デバイスリスト ---
         Expanded(
-          child: _devices.isEmpty
-              ? const Center(child: Text("デバイスが見つかりません"))
-              : ListView.builder(
-            itemCount: _devices.length,
-            itemBuilder: (context, index) {
-              final device = _devices[index];
-              final bool isConnected = _selectedDeviceIp == device.ip;
+          child: StreamBuilder<List<DlnaDevice>>(
+            stream: _logic.devicesStream,
+            initialData: const [],
+            builder: (context, snapshot) {
+              final devices = snapshot.data ?? [];
 
-              return Card(
-                color: isConnected
-                    ? Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3)
-                    : null,
-                margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                child: Padding(
-                  padding: const EdgeInsets.all(10.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // --- 上段：情報エリア（タップで接続確認） ---
-                      InkWell(
-                        onTap: () => _testConnection(device),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  // デバイス名
-                                  Text(
-                                    device.name,
-                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  // IPアドレスとMACアドレスを横並びで
-                                  Wrap(
-                                    spacing: 12.0,
-                                    children: [
-                                      Row(
-                                        mainAxisSize: MainAxisSize.min,
+              if (devices.isEmpty) {
+                return const Center(child: Text("デバイスが見つかりません"));
+              }
+
+              // 接続中デバイスの監視
+              return StreamBuilder<DlnaDevice?>(
+                stream: _logic.connectedDeviceStream,
+                initialData: _logic.currentConnectedDevice,
+                builder: (context, connectedSnapshot) {
+                  final connectedDevice = connectedSnapshot.data;
+
+                  return ListView.builder(
+                    itemCount: devices.length,
+                    itemBuilder: (context, index) {
+                      final device = devices[index];
+                      final bool isConnected = connectedDevice?.ip == device.ip;
+
+                      return Card(
+                        color: isConnected
+                            ? Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3)
+                            : null,
+                        margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        child: Padding(
+                          padding: const EdgeInsets.all(10.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // --- 上段：情報エリア（タップで接続確認） ---
+                              InkWell(
+                                onTap: () => _testConnection(device),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
-                                          const Icon(Icons.wifi, size: 14, color: Colors.grey),
-                                          const SizedBox(width: 4),
-                                          Text(device.ip, style: const TextStyle(fontSize: 13, color: Colors.grey)),
+                                          // デバイス名
+                                          Text(
+                                            device.name,
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          // IPアドレスとMACアドレスを横並びで
+                                          Wrap(
+                                            spacing: 12.0,
+                                            children: [
+                                              Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  const Icon(Icons.wifi, size: 14, color: Colors.grey),
+                                                  const SizedBox(width: 4),
+                                                  Text(device.ip, style: const TextStyle(fontSize: 13, color: Colors.grey)),
+                                                ],
+                                              ),
+                                              if (device.macAddress != null && device.macAddress!.isNotEmpty)
+                                                Row(
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  children: [
+                                                    const Icon(Icons.vpn_key, size: 14, color: Colors.grey),
+                                                    const SizedBox(width: 4),
+                                                    Text(device.macAddress!, style: const TextStyle(fontSize: 13, color: Colors.grey)),
+                                                  ],
+                                                ),
+                                            ],
+                                          ),
                                         ],
                                       ),
-                                      if (device.macAddress != null && device.macAddress!.isNotEmpty)
-                                        Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            const Icon(Icons.vpn_key, size: 14, color: Colors.grey),
-                                            const SizedBox(width: 4),
-                                            Text(device.macAddress!, style: const TextStyle(fontSize: 13, color: Colors.grey)),
-                                          ],
-                                        ),
+                                    ),
+                                    if (isConnected)
+                                      const Icon(Icons.link, color: Colors.green),
+                                  ],
+                                ),
+                              ),
+
+                              const Divider(),
+
+                              // --- 下段：操作ボタンエリア ---
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  // WOLボタン
+                                  Tooltip(
+                                    message: "WOL (起動信号) を送信",
+                                    child: ElevatedButton.icon(
+                                      onPressed: () => _sendWolOnly(device),
+                                      icon: const Icon(Icons.tv, size: 18),
+                                      label: const Text("WOL"),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.blue.shade50,
+                                        foregroundColor: Colors.blue,
+                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                        textStyle: const TextStyle(fontSize: 12),
+                                      ),
+                                    ),
+                                  ),
+
+                                  // 編集・削除
+                                  Row(
+                                    children: [
+                                      IconButton(
+                                        icon: const Icon(Icons.edit, size: 20, color: Colors.grey),
+                                        onPressed: () => _showRenameDialog(device),
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(Icons.delete, size: 20, color: Colors.grey),
+                                        onPressed: () => _deleteDevice(device),
+                                      ),
                                     ],
                                   ),
                                 ],
                               ),
-                            ),
-                            if (isConnected)
-                              const Icon(Icons.link, color: Colors.green),
-                          ],
-                        ),
-                      ),
-
-                      const Divider(),
-
-                      // --- 下段：操作ボタンエリア ---
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          // WOLボタン
-                          Tooltip(
-                            message: "WOL (起動信号) を送信",
-                            child: ElevatedButton.icon(
-                              onPressed: () => _sendWolOnly(device),
-                              icon: const Icon(Icons.tv, size: 18),
-                              label: const Text("WOL"),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.blue.shade50,
-                                foregroundColor: Colors.blue,
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                textStyle: const TextStyle(fontSize: 12),
-                              ),
-                            ),
-                          ),
-
-                          // 【削除】ADB起動ボタンを削除
-                          /*
-                          Tooltip(
-                            message: "Kodiを起動 (ADB)",
-                            child: ElevatedButton.icon(
-                              onPressed: () => _launchKodiOnly(device),
-                              icon: const Icon(Icons.rocket_launch, size: 18),
-                              label: const Text("起動"),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.orange.shade50,
-                                foregroundColor: Colors.deepOrange,
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                textStyle: const TextStyle(fontSize: 12),
-                              ),
-                            ),
-                          ),
-                          */
-
-                          // 編集・削除
-                          Row(
-                            children: [
-                              IconButton(
-                                icon: const Icon(Icons.edit, size: 20, color: Colors.grey),
-                                onPressed: () => _showRenameDialog(device),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.delete, size: 20, color: Colors.grey),
-                                onPressed: () => _deleteDevice(device),
-                              ),
                             ],
                           ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
+                        ),
+                      );
+                    },
+                  );
+                },
               );
             },
           ),
@@ -468,7 +357,7 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
   }
 }
 
-// MACアドレス整形フォーマッター (変更なし)
+// MACアドレス整形フォーマッター (UI補助のためViewに残す)
 class _MacAddressFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(

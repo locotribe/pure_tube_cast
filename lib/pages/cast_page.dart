@@ -1,10 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // MethodChannel用
-import 'package:url_launcher/url_launcher.dart';
 
-import '../managers/playlist_manager.dart';
-import '../services/dlna_service.dart';
-import '../services/video_resolver.dart';
+import '../logics/cast_logic.dart'; // ロジッククラスをインポート
 import 'playlist_page.dart';
 
 class CastPage extends StatefulWidget {
@@ -17,11 +13,7 @@ class CastPage extends StatefulWidget {
 }
 
 class _CastPageState extends State<CastPage> {
-  final VideoResolver _resolver = VideoResolver();
-  final DlnaService _dlnaService = DlnaService();
-  final PlaylistManager _playlistManager = PlaylistManager();
-
-  static const platform = MethodChannel('com.example.pure_tube_cast/app_control');
+  final CastLogic _logic = CastLogic();
 
   String _statusMessage = "読み込み中...";
   Map<String, dynamic>? _videoMetadata;
@@ -47,11 +39,8 @@ class _CastPageState extends State<CastPage> {
       });
     }
 
-    final match = RegExp(r'(https?://\S+)').firstMatch(url);
-    final targetUrl = match?.group(0) ?? url;
-
     try {
-      final metadata = await _resolver.resolveMetadata(targetUrl);
+      final metadata = await _logic.resolveVideo(url);
 
       if (mounted) {
         if (metadata != null) {
@@ -81,11 +70,11 @@ class _CastPageState extends State<CastPage> {
   Future<String?> _selectPlaylistAndAdd() async {
     if (_videoMetadata == null) return null;
 
-    final playlists = _playlistManager.currentPlaylists;
+    final playlists = _logic.getPlaylists();
 
     // リストが空なら作成（基本ありえないが念のため）
     if (playlists.isEmpty) {
-      _playlistManager.createPlaylist("メインリスト");
+      _logic.createPlaylist("メインリスト");
     }
 
     String? targetId;
@@ -136,13 +125,7 @@ class _CastPageState extends State<CastPage> {
     }
 
     // 選択されたリストに追加（バックグラウンド処理）
-    // ※ ここではKodiへの送信は行わない（"今すぐ再生"の場合のみ別途行う）
-    _playlistManager.processAndAdd(
-        _dlnaService,
-        _videoMetadata!,
-        device: null, // Kodiへの自動送信はしない
-        targetPlaylistId: targetId
-    );
+    await _logic.addToLocalPlaylist(_videoMetadata!, targetId);
 
     return targetId;
   }
@@ -162,11 +145,7 @@ class _CastPageState extends State<CastPage> {
     }
 
     // アプリ最小化
-    try {
-      await platform.invokeMethod('moveTaskToBack');
-    } catch (e) {
-      print("[CastPage] Failed to minimize: $e");
-    }
+    await _logic.minimizeApp();
 
     if (mounted) Navigator.pop(context);
   }
@@ -190,7 +169,7 @@ class _CastPageState extends State<CastPage> {
 
   // 3. リストに追加して今すぐ再生
   Future<void> _addAndPlayNow() async {
-    final currentDevice = _dlnaService.currentDevice;
+    final currentDevice = _logic.getCurrentDevice();
     if (currentDevice == null) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("デバイスに接続されていません"))
@@ -206,48 +185,14 @@ class _CastPageState extends State<CastPage> {
 
     try {
       // Kodiにも追加して再生する処理
-      // 注: processAndAddは非同期でURL解決するため、streamUrlが確定するのを待つ必要があるが、
-      // ここでは簡易的に resolver で再度URL解決して即Kodiに投げる
-
-      final streamUrl = await _resolver.resolveStreamUrl(_videoMetadata!);
+      final streamUrl = await _logic.resolveStreamUrl(_videoMetadata!);
 
       if (streamUrl != null) {
-        // Kodiのリストに追加
-        await _dlnaService.addToPlaylist(
+        // Kodiに対して「今すぐ再生」を実行 (リストはクリアされるが即再生)
+        await _logic.playNowOnDevice(
             currentDevice,
             streamUrl,
-            _videoMetadata!['title'],
-            _videoMetadata!['thumbnailUrl']
-        );
-
-        // Kodiのリストの最後尾（今追加したもの）を再生
-        // ※正確な同期には課題があるが、ここでは「追加して再生」を実現する
-        // Kodi側のプレイリストサイズを取得する手段がないため、
-        // 「プレイリストをクリアして再生」するか、「とりあえず再生」か迷うが、
-        // ユーザーの意向は「リストに追加して再生」なので、クリアはしない。
-        // ただし、位置指定(Player.Open)が難しいので、単純に PlayNow(Clear+Add) してしまうのが一番確実ではある。
-        // しかし仕様としては「リストの最後尾に追加」なので...
-        // ここでは「PlayNow (Clear & Add)」方式を採用せず、「Kodiにも追加し、可能なら再生」を試みる。
-        // ただ、位置が不明なため、今回は安全策として「addToPlaylist」のみ行い、ユーザーに再生を委ねるか、
-        // あるいは割り切って「その動画を単体再生(PlayNow)」するか。
-
-        // 結論: 前回の仕様通り「リストの最後尾に追加して再生」を目指すが、
-        // 複雑さを避けるため、ここではDlnaServiceのPlayNow（上書き再生）を使う方が
-        // 「今すぐ再生」の挙動として自然かもしれない。
-        // いえ、ユーザーは「リストの最後に」と言っていたので、
-        // アプリ内リストは最後尾、KodiへもAdd、そしてKodiへPlayer.Open(position: 後ろ)を送りたいが...
-        // Positionがわからないので、今回は【アプリ内リストに追加 -> そのリスト画面へ遷移】し、
-        // 「再生はリスト画面から行ってください（ハイライト等はしない）」とするか、
-        // あるいは playNow (単発再生) して、アプリ内リストにも残す、とする。
-
-        // ★修正方針: アプリ内リストには追加済み。
-        // Kodiに対しては、強制的に「この動画を再生」させる（PlayNowメソッド使用）。
-        // これによりKodi側のリストはクリアされるが、「今すぐ見る」目的は果たせる。
-        await _dlnaService.playNow(
-            currentDevice,
-            streamUrl,
-            _videoMetadata!['title'],
-            _videoMetadata!['thumbnailUrl']
+            _videoMetadata!
         );
       }
 
@@ -273,11 +218,7 @@ class _CastPageState extends State<CastPage> {
   void _openInBrowser() async {
     if (_videoMetadata == null && widget.initialUrl == null) return;
     final urlStr = _videoMetadata?['url'] ?? widget.initialUrl!;
-    final Uri uri = Uri.parse(urlStr);
-
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
+    _logic.openInBrowser(urlStr);
   }
 
   @override
@@ -296,10 +237,8 @@ class _CastPageState extends State<CastPage> {
                 Container(
                   width: double.infinity,
                   decoration: BoxDecoration(
-                    // 【修正】背景色をテーマに合わせて変更 (Surface Variantなど)
                     color: Theme.of(context).colorScheme.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(12),
-                    // 【修正】ボーダーもテーマ依存または削除
                     border: Border.all(color: Theme.of(context).dividerColor),
                   ),
                   clipBehavior: Clip.antiAlias,
@@ -330,7 +269,6 @@ class _CastPageState extends State<CastPage> {
                             Text(
                               _videoMetadata?['title'] ?? "読み込み中...",
                               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                              // 色指定を削除すれば自動で白/黒になる
                             ),
                             const SizedBox(height: 5),
                             Text(_statusMessage, style: const TextStyle(color: Colors.grey)),

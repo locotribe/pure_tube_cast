@@ -1,27 +1,29 @@
 import 'package:flutter/material.dart';
-import '../managers/playlist_manager.dart';
+import '../models/playlist_model.dart';
 import '../services/dlna_service.dart';
 import '../pages/playlist_page.dart';
+import '../logics/library_logic.dart'; // ロジッククラス
 
 class LibraryView extends StatelessWidget {
   const LibraryView({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final manager = PlaylistManager();
-    final dlnaService = DlnaService();
+    final logic = LibraryLogic();
 
     return Stack(
       children: [
+        // デバイス接続状態の監視
         StreamBuilder<DlnaDevice?>(
-          stream: dlnaService.connectedDeviceStream,
-          initialData: dlnaService.currentDevice,
+          stream: logic.connectedDeviceStream,
+          initialData: logic.currentDevice,
           builder: (context, deviceSnapshot) {
             final currentDevice = deviceSnapshot.data;
 
+            // プレイリスト一覧の監視
             return StreamBuilder<List<PlaylistModel>>(
-              stream: manager.playlistsStream,
-              initialData: manager.currentPlaylists,
+              stream: logic.playlistsStream,
+              initialData: logic.currentPlaylists,
               builder: (context, snapshot) {
                 final playlists = snapshot.data ?? [];
 
@@ -29,20 +31,18 @@ class LibraryView extends StatelessWidget {
                   return const Center(child: Text("プレイリストがありません"));
                 }
 
-                // 【変更】ListView -> ReorderableListView
                 return ReorderableListView.builder(
                   padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
                   itemCount: playlists.length,
                   // 並べ替え時の処理
                   onReorder: (oldIndex, newIndex) {
-                    manager.reorderPlaylists(oldIndex, newIndex);
+                    logic.reorderPlaylists(oldIndex, newIndex);
                   },
                   itemBuilder: (context, index) {
                     final playlist = playlists[index];
                     final bool isPlaying = playlist.items.any((item) => item.isPlaying);
 
                     return Card(
-                      // 【必須】並べ替えには一意なKeyが必要です
                       key: ValueKey(playlist.id),
                       elevation: isPlaying ? 4 : 2,
                       margin: const EdgeInsets.symmetric(vertical: 6),
@@ -101,14 +101,11 @@ class LibraryView extends StatelessWidget {
                               onPressed: (currentDevice != null && playlist.items.isNotEmpty)
                                   ? () {
                                 final lastIndex = playlist.lastPlayedIndex;
+                                // レジューム再生の確認
                                 if (lastIndex > 0 && lastIndex < playlist.items.length) {
-                                  _showResumeDialog(context, manager, currentDevice, playlist);
+                                  _showResumeDialog(context, logic, currentDevice, playlist);
                                 } else {
-                                  manager.playSequence(
-                                      currentDevice,
-                                      playlist.id,
-                                      0
-                                  );
+                                  logic.playPlaylist(currentDevice, playlist.id, index: 0);
                                   ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(content: Text("「${playlist.name}」を再生します"))
                                   );
@@ -119,12 +116,12 @@ class LibraryView extends StatelessWidget {
                             PopupMenuButton<String>(
                               onSelected: (value) {
                                 if (value == 'rename') {
-                                  _showRenameDialog(context, manager, playlist);
+                                  _showRenameDialog(context, logic, playlist);
                                 } else if (value == 'delete') {
-                                  _showDeleteDialog(context, manager, playlist);
+                                  _showDeleteDialog(context, logic, playlist);
                                 } else if (value == 'play_start') {
                                   if (currentDevice != null && playlist.items.isNotEmpty) {
-                                    manager.playSequence(currentDevice, playlist.id, 0);
+                                    logic.playPlaylist(currentDevice, playlist.id, index: 0);
                                     ScaffoldMessenger.of(context).showSnackBar(
                                         const SnackBar(content: Text("最初から再生します"))
                                     );
@@ -152,7 +149,7 @@ class LibraryView extends StatelessWidget {
           bottom: 16,
           child: FloatingActionButton(
             heroTag: "add_playlist",
-            onPressed: () => _showCreateDialog(context, manager),
+            onPressed: () => _showCreateDialog(context, logic),
             child: const Icon(Icons.create_new_folder),
           ),
         ),
@@ -160,8 +157,7 @@ class LibraryView extends StatelessWidget {
     );
   }
 
-  // ... (以下、_showResumeDialogなどのダイアログメソッドは変更なし、そのまま残してください) ...
-  void _showResumeDialog(BuildContext context, PlaylistManager manager, DlnaDevice device, PlaylistModel playlist) {
+  void _showResumeDialog(BuildContext context, LibraryLogic logic, DlnaDevice device, PlaylistModel playlist) {
     final lastItemTitle = playlist.items[playlist.lastPlayedIndex].title;
     showDialog(
       context: context,
@@ -183,7 +179,7 @@ class LibraryView extends StatelessWidget {
           ),
           TextButton(
             onPressed: () {
-              manager.playSequence(device, playlist.id, 0);
+              logic.playPlaylist(device, playlist.id, index: 0);
               Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("最初から再生します")));
             },
@@ -191,7 +187,7 @@ class LibraryView extends StatelessWidget {
           ),
           ElevatedButton(
             onPressed: () {
-              manager.playSequence(device, playlist.id, playlist.lastPlayedIndex);
+              logic.playPlaylist(device, playlist.id, index: playlist.lastPlayedIndex);
               Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("続きから再生します")));
             },
@@ -202,7 +198,7 @@ class LibraryView extends StatelessWidget {
     );
   }
 
-  void _showCreateDialog(BuildContext context, PlaylistManager manager) {
+  void _showCreateDialog(BuildContext context, LibraryLogic logic) {
     final controller = TextEditingController();
     showDialog(
       context: context,
@@ -218,7 +214,7 @@ class LibraryView extends StatelessWidget {
           ElevatedButton(
             onPressed: () {
               if (controller.text.isNotEmpty) {
-                manager.createPlaylist(controller.text);
+                logic.createPlaylist(controller.text);
                 Navigator.pop(context);
               }
             },
@@ -229,7 +225,7 @@ class LibraryView extends StatelessWidget {
     );
   }
 
-  void _showRenameDialog(BuildContext context, PlaylistManager manager, PlaylistModel playlist) {
+  void _showRenameDialog(BuildContext context, LibraryLogic logic, PlaylistModel playlist) {
     final controller = TextEditingController(text: playlist.name);
     showDialog(
       context: context,
@@ -244,7 +240,7 @@ class LibraryView extends StatelessWidget {
           ElevatedButton(
             onPressed: () {
               if (controller.text.isNotEmpty) {
-                manager.renamePlaylist(playlist.id, controller.text);
+                logic.renamePlaylist(playlist.id, controller.text);
                 Navigator.pop(context);
               }
             },
@@ -255,7 +251,7 @@ class LibraryView extends StatelessWidget {
     );
   }
 
-  void _showDeleteDialog(BuildContext context, PlaylistManager manager, PlaylistModel playlist) {
+  void _showDeleteDialog(BuildContext context, LibraryLogic logic, PlaylistModel playlist) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -265,7 +261,7 @@ class LibraryView extends StatelessWidget {
           TextButton(onPressed: () => Navigator.pop(context), child: const Text("キャンセル")),
           TextButton(
             onPressed: () {
-              manager.deletePlaylist(playlist.id);
+              logic.deletePlaylist(playlist.id);
               Navigator.pop(context);
             },
             child: const Text("削除", style: TextStyle(color: Colors.red)),

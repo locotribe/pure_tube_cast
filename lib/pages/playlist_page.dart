@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
-import '../managers/playlist_manager.dart';
-import '../services/dlna_service.dart';
+import '../services/dlna_service.dart'; // DlnaDeviceの型定義用
+import '../models/playlist_model.dart';
+import '../models/local_playlist_item.dart';
+import '../logics/playlist_page_logic.dart'; // ロジッククラス
 import 'connection_page.dart';
 
 class PlaylistPage extends StatefulWidget {
@@ -13,9 +15,7 @@ class PlaylistPage extends StatefulWidget {
 }
 
 class _PlaylistPageState extends State<PlaylistPage> {
-  final DlnaService _dlnaService = DlnaService();
-  final PlaylistManager _manager = PlaylistManager();
-
+  final PlaylistPageLogic _logic = PlaylistPageLogic();
   final ScrollController _scrollController = ScrollController();
 
   bool _isSelectionMode = false;
@@ -76,7 +76,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("キャンセル")),
           TextButton(
             onPressed: () {
-              _manager.removeItems(_selectedIds, playlistId: widget.playlistId);
+              _logic.removeItems(_selectedIds, widget.playlistId);
               Navigator.pop(ctx);
               _toggleSelectionMode();
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('削除しました')));
@@ -88,8 +88,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
     );
   }
 
-  // 【追加】リセット確認ダイアログ
-  void _showResetDialog() {
+  void _showResetDialog(DlnaDevice device) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -99,10 +98,8 @@ class _PlaylistPageState extends State<PlaylistPage> {
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("キャンセル")),
           TextButton(
             onPressed: () {
-              if (_dlnaService.currentDevice != null) {
-                _manager.stopSession(_dlnaService.currentDevice!);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('リセットしました')));
-              }
+              _logic.stopSession(device);
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('リセットしました')));
               Navigator.pop(ctx);
             },
             child: const Text("リセット", style: TextStyle(color: Colors.red)),
@@ -115,23 +112,21 @@ class _PlaylistPageState extends State<PlaylistPage> {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<DlnaDevice?>(
-      stream: _dlnaService.connectedDeviceStream,
-      initialData: _dlnaService.currentDevice,
+      stream: _logic.connectedDeviceStream,
+      initialData: _logic.currentDevice,
       builder: (context, deviceSnapshot) {
         final currentDevice = deviceSnapshot.data;
         final isConnected = currentDevice != null;
 
         return StreamBuilder<List<PlaylistModel>>(
-          stream: _manager.playlistsStream,
-          initialData: _manager.currentPlaylists,
+          stream: _logic.playlistsStream,
+          initialData: _logic.currentPlaylists,
           builder: (context, snapshot) {
-            final playlists = snapshot.data ?? [];
 
-            final targetList = widget.playlistId != null
-                ? playlists.firstWhere((p) => p.id == widget.playlistId, orElse: () => playlists.isNotEmpty ? playlists.first : PlaylistModel(id: 'dummy', name: 'Error', items: []))
-                : (playlists.isNotEmpty ? playlists.first : null);
+            final targetList = _logic.getTargetPlaylist(widget.playlistId);
 
-            if (targetList == null) {
+            // プレイリスト自体が存在しない場合（削除された直後など）のガード
+            if (targetList.id == 'dummy' && targetList.items.isEmpty && targetList.name == 'Error') {
               return const Scaffold(body: Center(child: CircularProgressIndicator()));
             }
 
@@ -156,12 +151,12 @@ class _PlaylistPageState extends State<PlaylistPage> {
                       onPressed: _selectedIds.isNotEmpty ? _deleteSelectedItems : null,
                     ),
                   ] else ...[
-                    // 【追加】再生リストクリア
+                    // 再生リストクリア
                     if (isConnected)
                       IconButton(
                         icon: const Icon(Icons.playlist_remove, color: Colors.red),
                         tooltip: "再生リストクリア",
-                        onPressed: _showResetDialog,
+                        onPressed: () => _showResetDialog(currentDevice!),
                       ),
 
                     IconButton(
@@ -248,7 +243,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
         itemCount: items.length,
         onReorder: (oldIndex, newIndex) {
-          _manager.reorder(oldIndex, newIndex, playlistId: widget.playlistId);
+          _logic.reorderItems(oldIndex, newIndex, widget.playlistId);
         },
         itemBuilder: (context, index) {
           final item = items[index];
@@ -277,7 +272,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
               );
             },
             onDismissed: (direction) {
-              _manager.removeItem(index, playlistId: widget.playlistId);
+              _logic.removeItem(index, widget.playlistId);
             },
             child: Card(
               key: ValueKey(item.id),
@@ -320,7 +315,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                      fontWeight: isPlaying ? FontWeight.bold : FontWeight.normal,
+                    fontWeight: isPlaying ? FontWeight.bold : FontWeight.normal,
                     color: isPlaying ? Colors.red : Theme.of(context).colorScheme.onSurface,
                   ),
                 ),
@@ -365,7 +360,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("キャンセル")),
           TextButton(
             onPressed: () {
-              _manager.clear(playlistId: widget.playlistId);
+              _logic.clearPlaylist(widget.playlistId);
               Navigator.pop(ctx);
             },
             child: const Text("クリア", style: TextStyle(color: Colors.red)),
@@ -418,11 +413,8 @@ class _PlaylistPageState extends State<PlaylistPage> {
                     return;
                   }
 
-                  final pid = widget.playlistId ?? _manager.currentPlaylists.first.id;
-
-                  // 【修正】タップ時は「ジャンプ」か「新規」かを自動判定するメソッドを呼ぶ
                   Navigator.pop(ctx);
-                  await _manager.playOrJump(currentDevice, pid, index);
+                  await _logic.playOrJump(currentDevice, widget.playlistId, index);
                 },
               ),
             ],
@@ -433,9 +425,12 @@ class _PlaylistPageState extends State<PlaylistPage> {
   }
 
   void _showMoveToDialog(BuildContext context, LocalPlaylistItem item) {
-    // ... (既存のまま) ...
-    final playlists = _manager.currentPlaylists;
+    final playlists = _logic.currentPlaylists;
+    // プレイリスト一覧取得（現在のリストを除くなど必要ならフィルタリング可能だが、現状はすべて表示）
+    // widget.playlistId と同じリストは disable にするなどのUI制御はここで行う
+
     final currentListId = widget.playlistId ?? (playlists.isNotEmpty ? playlists.first.id : null);
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -457,10 +452,10 @@ class _PlaylistPageState extends State<PlaylistPage> {
                 subtitle: Text("${list.items.length} items"),
                 enabled: !isCurrent,
                 onTap: () {
-                  _manager.moveItemToPlaylist(
+                  _logic.moveItem(
                     item.id,
-                    fromPlaylistId: widget.playlistId,
-                    toPlaylistId: list.id,
+                    widget.playlistId, // from
+                    list.id,           // to
                   );
                   Navigator.pop(ctx);
                   ScaffoldMessenger.of(context).showSnackBar(

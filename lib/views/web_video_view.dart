@@ -1,21 +1,20 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
-import '../managers/site_manager.dart';
 import '../models/site_model.dart';
+import '../logics/web_video_logic.dart'; // ロジッククラス
 
 class WebVideoView extends StatelessWidget {
   const WebVideoView({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final SiteManager siteManager = SiteManager();
+    final logic = WebVideoLogic();
 
     return Column(
       children: [
         Expanded(
           child: StreamBuilder<List<SiteModel>>(
-            stream: siteManager.sitesStream,
-            initialData: siteManager.currentSites,
+            stream: logic.sitesStream,
+            initialData: logic.currentSites,
             builder: (context, snapshot) {
               final sites = snapshot.data ?? [];
 
@@ -33,6 +32,7 @@ class WebVideoView extends StatelessWidget {
                     // YouTube (固定)
                     return _buildSiteCard(
                       context,
+                      logic: logic,
                       site: SiteModel(id: 'yt', name: "YouTube", url: "https://www.youtube.com"),
                       isEditable: false,
                       fixedIcon: Icons.play_circle_fill,
@@ -42,6 +42,7 @@ class WebVideoView extends StatelessWidget {
                     final site = sites[index - 1];
                     return _buildSiteCard(
                       context,
+                      logic: logic,
                       site: site,
                       isEditable: true,
                     );
@@ -57,21 +58,27 @@ class WebVideoView extends StatelessWidget {
 
   Widget _buildSiteCard(
       BuildContext context, {
+        required WebVideoLogic logic,
         required SiteModel site,
         required bool isEditable,
         IconData? fixedIcon,
         Color? fixedColor,
       }) {
     return InkWell(
-      onTap: () => _openUrl(context, site.url),
+      onTap: () async {
+        final success = await logic.launchSiteUrl(site.url);
+        if (!success && context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("URLを開けませんでした: ${site.url}")),
+          );
+        }
+      },
       borderRadius: BorderRadius.circular(16),
       child: Container(
         decoration: BoxDecoration(
-          // 【修正】テーマのカード色を使用
           color: Theme.of(context).cardColor,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            // 【修正】ボーダー色を薄く、ダークモード対応
             color: Theme.of(context).dividerColor.withOpacity(0.1),
           ),
           boxShadow: [
@@ -88,7 +95,6 @@ class WebVideoView extends StatelessWidget {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // アイコン表示ロジック
                   if (fixedIcon != null)
                     Icon(fixedIcon, size: 48, color: fixedColor)
                   else if (site.iconUrl != null && site.iconUrl!.isNotEmpty)
@@ -117,15 +123,14 @@ class WebVideoView extends StatelessWidget {
                 ],
               ),
             ),
-            // 【変更】編集ボタン
             if (isEditable)
               Positioned(
                 top: 0,
                 right: 0,
                 child: IconButton(
-                  icon: const Icon(Icons.edit, size: 20, color: Colors.grey), // アイコンを編集マークに変更
+                  icon: const Icon(Icons.edit, size: 20, color: Colors.grey),
                   tooltip: "編集",
-                  onPressed: () => _showEditDialog(context, site),
+                  onPressed: () => _showEditDialog(context, logic, site),
                 ),
               ),
           ],
@@ -134,11 +139,9 @@ class WebVideoView extends StatelessWidget {
     );
   }
 
-  // 【追加】編集・削除ダイアログ
-  void _showEditDialog(BuildContext context, SiteModel site) {
+  void _showEditDialog(BuildContext context, WebVideoLogic logic, SiteModel site) {
     final nameController = TextEditingController(text: site.name);
     final urlController = TextEditingController(text: site.url);
-    final SiteManager siteManager = SiteManager();
 
     showDialog(
       context: context,
@@ -163,12 +166,11 @@ class WebVideoView extends StatelessWidget {
             ],
           ),
         ),
-        actionsAlignment: MainAxisAlignment.spaceBetween, // ボタンを左右に配置
+        actionsAlignment: MainAxisAlignment.spaceBetween,
         actions: [
-          // 削除ボタン (赤色)
           TextButton(
             onPressed: () {
-              siteManager.removeSite(site.id);
+              logic.removeSite(site.id);
               Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("削除しました")));
             },
@@ -182,34 +184,22 @@ class WebVideoView extends StatelessWidget {
                 child: const Text("キャンセル"),
               ),
               const SizedBox(width: 8),
-              // 更新ボタン
               ElevatedButton(
                 onPressed: () {
                   final newName = nameController.text.trim();
                   final newUrl = urlController.text.trim();
                   if (newName.isNotEmpty && newUrl.isNotEmpty) {
-                    siteManager.updateSite(site.id, newName, newUrl);
+                    logic.updateSite(site.id, newName, newUrl);
                     Navigator.pop(context);
                     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("更新しました")));
                   }
                 },
-                child: const Text("保存"), // 「追加」ではなく「保存」
+                child: const Text("保存"),
               ),
             ],
           ),
         ],
       ),
     );
-  }
-
-  void _openUrl(BuildContext context, String url) async {
-    final Uri uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("URLを開けませんでした: $url")));
-      }
-    }
   }
 }

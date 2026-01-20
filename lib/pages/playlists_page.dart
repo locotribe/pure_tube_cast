@@ -1,19 +1,21 @@
 import 'package:flutter/material.dart';
-import '../managers/playlist_manager.dart';
+import '../models/playlist_model.dart';
 import 'playlist_page.dart';
+import '../logics/library_logic.dart'; // ロジッククラスを再利用
 
 class PlaylistsPage extends StatelessWidget {
   const PlaylistsPage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final manager = PlaylistManager();
+    // LibraryViewと同じロジッククラスを使用
+    final logic = LibraryLogic();
 
     return Scaffold(
       appBar: AppBar(title: const Text("ライブラリ")),
       body: StreamBuilder<List<PlaylistModel>>(
-        stream: manager.playlistsStream,
-        initialData: manager.currentPlaylists,
+        stream: logic.playlistsStream,
+        initialData: logic.currentPlaylists,
         builder: (context, snapshot) {
           final playlists = snapshot.data ?? [];
 
@@ -45,9 +47,9 @@ class PlaylistsPage extends StatelessWidget {
                   trailing: PopupMenuButton<String>(
                     onSelected: (value) {
                       if (value == 'rename') {
-                        _showRenameDialog(context, manager, playlist);
+                        _showRenameDialog(context, logic, playlist);
                       } else if (value == 'delete') {
-                        _showDeleteDialog(context, manager, playlist);
+                        _showDeleteDialog(context, logic, playlist);
                       }
                     },
                     itemBuilder: (context) => [
@@ -62,7 +64,7 @@ class PlaylistsPage extends StatelessWidget {
         },
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => _showCreateDialog(context, manager),
+        onPressed: () => _showCreateDialog(context, logic),
         child: const Icon(Icons.create_new_folder),
       ),
     );
@@ -70,7 +72,7 @@ class PlaylistsPage extends StatelessWidget {
 
   // --- ダイアログ ---
 
-  void _showCreateDialog(BuildContext context, PlaylistManager manager) {
+  void _showCreateDialog(BuildContext context, LibraryLogic logic) {
     final controller = TextEditingController();
     showDialog(
       context: context,
@@ -86,7 +88,7 @@ class PlaylistsPage extends StatelessWidget {
           ElevatedButton(
             onPressed: () {
               if (controller.text.isNotEmpty) {
-                manager.createPlaylist(controller.text);
+                logic.createPlaylist(controller.text);
                 Navigator.pop(context);
               }
             },
@@ -97,7 +99,7 @@ class PlaylistsPage extends StatelessWidget {
     );
   }
 
-  void _showRenameDialog(BuildContext context, PlaylistManager manager, PlaylistModel playlist) {
+  void _showRenameDialog(BuildContext context, LibraryLogic logic, PlaylistModel playlist) {
     final controller = TextEditingController(text: playlist.name);
     showDialog(
       context: context,
@@ -112,7 +114,7 @@ class PlaylistsPage extends StatelessWidget {
           ElevatedButton(
             onPressed: () {
               if (controller.text.isNotEmpty) {
-                manager.renamePlaylist(playlist.id, controller.text);
+                logic.renamePlaylist(playlist.id, controller.text);
                 Navigator.pop(context);
               }
             },
@@ -123,7 +125,7 @@ class PlaylistsPage extends StatelessWidget {
     );
   }
 
-  void _showDeleteDialog(BuildContext context, PlaylistManager manager, PlaylistModel playlist) {
+  void _showDeleteDialog(BuildContext context, LibraryLogic logic, PlaylistModel playlist) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -133,7 +135,7 @@ class PlaylistsPage extends StatelessWidget {
           TextButton(onPressed: () => Navigator.pop(context), child: const Text("キャンセル")),
           TextButton(
             onPressed: () {
-              manager.deletePlaylist(playlist.id);
+              logic.deletePlaylist(playlist.id);
               Navigator.pop(context);
             },
             child: const Text("削除", style: TextStyle(color: Colors.red)),

@@ -1,18 +1,18 @@
 import 'package:flutter/material.dart';
-import '../managers/theme_manager.dart';
+import '../logics/settings_logic.dart'; // ロジッククラス
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final themeManager = ThemeManager();
+    final logic = SettingsLogic();
 
     return Scaffold(
       appBar: AppBar(title: const Text("設定")),
       body: StreamBuilder<ThemeMode>(
-        stream: themeManager.themeStream,
-        initialData: themeManager.currentThemeMode,
+        stream: logic.themeStream,
+        initialData: logic.currentThemeMode,
         builder: (context, snapshot) {
           final currentMode = snapshot.data ?? ThemeMode.system;
 
@@ -27,21 +27,21 @@ class SettingsPage extends StatelessWidget {
                 secondary: const Icon(Icons.wb_sunny),
                 value: ThemeMode.light,
                 groupValue: currentMode,
-                onChanged: (value) => themeManager.setThemeMode(value!),
+                onChanged: (value) => logic.setThemeMode(value!),
               ),
               RadioListTile<ThemeMode>(
                 title: const Text("ダークモード"),
                 secondary: const Icon(Icons.nightlight_round),
                 value: ThemeMode.dark,
                 groupValue: currentMode,
-                onChanged: (value) => themeManager.setThemeMode(value!),
+                onChanged: (value) => logic.setThemeMode(value!),
               ),
               RadioListTile<ThemeMode>(
                 title: const Text("システムのデフォルト"),
                 secondary: const Icon(Icons.settings_brightness),
                 value: ThemeMode.system,
                 groupValue: currentMode,
-                onChanged: (value) => themeManager.setThemeMode(value!),
+                onChanged: (value) => logic.setThemeMode(value!),
               ),
             ],
           );
