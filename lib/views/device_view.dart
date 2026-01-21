@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/dlna_service.dart';
-import '../logics/device_view_logic.dart'; // ロジッククラス
+import '../logics/device_view_logic.dart';
 
 class DeviceView extends StatefulWidget {
   const DeviceView({super.key});
@@ -77,6 +77,34 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
       SnackBar(content: Text("WOL送信: ${device.macAddress}")),
     );
     await _logic.sendWol(device.macAddress!);
+  }
+
+  // ■■■■■ アプリ起動 (ADB) ■■■■■
+  // 【追加】ロケットアイコン押下時の処理
+  Future<void> _launchApp(DlnaDevice device) async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("${device.name} へ起動コマンドを送信中...")),
+    );
+
+    try {
+      await _logic.launchAppViaAdb(device);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("起動コマンドを送信しました")),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        // エラー詳細を表示（接続拒否やタイムアウトなど）
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("起動失敗: $e"),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    }
   }
 
   void _showRenameDialog(DlnaDevice device) {
@@ -266,7 +294,7 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
                             children: [
                               // --- 上段：情報エリア（タップで接続/切断） ---
                               InkWell(
-                                onTap: () => _onDeviceTap(device, isConnected), // 【変更】
+                                onTap: () => _onDeviceTap(device, isConnected),
                                 child: Row(
                                   children: [
                                     Expanded(
@@ -331,6 +359,12 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
                                   ),
                                   Row(
                                     children: [
+                                      // 【追加】ロケットアイコン (Kodi起動)
+                                      IconButton(
+                                        icon: const Icon(Icons.rocket_launch, size: 20, color: Colors.deepOrange),
+                                        tooltip: "Kodiを起動 (ADB)",
+                                        onPressed: () => _launchApp(device),
+                                      ),
                                       IconButton(
                                         icon: const Icon(Icons.edit, size: 20, color: Colors.grey),
                                         onPressed: () => _showRenameDialog(device),
