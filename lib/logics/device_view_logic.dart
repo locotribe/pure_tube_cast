@@ -1,3 +1,5 @@
+// lib/logics/device_view_logic.dart
+
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
@@ -8,7 +10,7 @@ import '../services/dlna_service.dart';
 
 class DeviceViewLogic {
   final DlnaService _dlnaService = DlnaService();
-  final AdbManager _adbManager = AdbManager(); // シングルトン取得
+  final AdbManager _adbManager = AdbManager();
 
   // --- State Streams & Notifiers ---
   final StreamController<List<DlnaDevice>> _devicesController = StreamController.broadcast();
@@ -22,27 +24,36 @@ class DeviceViewLogic {
   // --- Internal State ---
   Map<String, String> _customNames = {};
   Map<String, String> _customMacs = {};
+  List<String> _savedIps = [];
+
+  Map<String, bool> _kodiStates = {};
+  final Set<String> _launchingIps = {};
+
   Timer? _searchTimeoutTimer;
+  StreamSubscription? _deviceSubscription;
 
   // --- Initialization & Disposal ---
 
   Future<void> init() async {
-    // マネージャーで鍵を初期化 (すでに初期化済みならスキップされる)
     await _adbManager.init();
-
     await _loadSettings();
+    await _loadSavedIps();
 
-    _dlnaService.deviceStream.listen((devices) {
+    _deviceSubscription = _dlnaService.deviceStream.listen((devices) {
       final processed = _processDevices(devices);
-      _devicesController.add(processed);
+      if (!_devicesController.isClosed) {
+        _devicesController.add(processed);
+      }
     });
 
-    await _loadSavedIps();
+    if (_dlnaService.currentDevices.isNotEmpty) {
+      _devicesController.add(_processDevices(_dlnaService.currentDevices));
+    }
   }
 
   void dispose() {
     _searchTimeoutTimer?.cancel();
-    _dlnaService.stopSearch();
+    _deviceSubscription?.cancel();
     _devicesController.close();
     isSearching.dispose();
   }
@@ -51,6 +62,9 @@ class DeviceViewLogic {
   void startSearch({int durationSec = 30}) {
     isSearching.value = true;
     _dlnaService.startSearch(duration: durationSec);
+
+    _checkAllKodiStatus();
+
     _searchTimeoutTimer?.cancel();
     _searchTimeoutTimer = Timer(Duration(seconds: durationSec), () {
       isSearching.value = false;
@@ -65,17 +79,72 @@ class DeviceViewLogic {
 
   // --- Data Processing ---
   List<DlnaDevice> _processDevices(List<DlnaDevice> devices) {
-    return devices.map((device) {
+    final mapped = devices.map((device) {
       String? savedName = _customNames[device.ip];
       String? savedMac = _customMacs[device.ip];
-      if (savedName != null || savedMac != null) {
+      bool isKodiFg = _kodiStates[device.ip] ?? false;
+      bool isLaunching = _launchingIps.contains(device.ip);
+
+      if (savedName != null || savedMac != null || isKodiFg || isLaunching) {
         return device.copyWith(
           name: savedName ?? device.name,
           macAddress: savedMac ?? device.macAddress,
+          isKodiForeground: isKodiFg,
+          isLaunching: isLaunching,
         );
       }
       return device;
     }).toList();
+
+    mapped.sort((a, b) {
+      bool aIsSaved = _savedIps.contains(a.ip);
+      bool bIsSaved = _savedIps.contains(b.ip);
+      if (aIsSaved && !bIsSaved) return -1;
+      if (!aIsSaved && bIsSaved) return 1;
+      return 0;
+    });
+
+    return mapped;
+  }
+
+  // --- Status Checks ---
+  void _checkAllKodiStatus() {
+    final devices = _dlnaService.currentDevices;
+    for (var device in devices) {
+      _checkKodiStatus(device);
+    }
+  }
+
+  Future<void> _checkKodiStatus(DlnaDevice device) async {
+    try {
+      if (_adbManager.crypto == null) await _adbManager.init();
+      if (_adbManager.crypto == null) return;
+
+      var connection = AdbConnection(device.ip, 5555, _adbManager.crypto!);
+      bool isConnected = await connection.connect();
+
+      if (isConnected) {
+        // 修正: ウィンドウフォーカスではなく、Resumeされているアクティビティを確認するコマンドに変更
+        // grep mResumedActivity は現在アクティブなアプリを確実に拾いやすい
+        var stream = await connection.open("shell:dumpsys activity activities | grep mResumedActivity");
+        var output = await stream.onPayload.cast<List<int>>().transform(utf8.decoder).join();
+
+        await connection.disconnect();
+
+        // 追加: デバッグログ（何が返ってきているか確認用）
+        print("[DeviceViewLogic] Status Output (${device.ip}): ${output.trim()}");
+
+        bool isRunning = output.contains("org.xbmc.kodi");
+
+        _kodiStates[device.ip] = isRunning;
+
+        if (!_devicesController.isClosed) {
+          _devicesController.add(_processDevices(_dlnaService.currentDevices));
+        }
+      }
+    } catch (e) {
+      print("[DeviceViewLogic] Check Status Error (${device.ip}): $e");
+    }
   }
 
   // --- Settings / Persistence ---
@@ -97,8 +166,8 @@ class DeviceViewLogic {
 
   Future<void> _loadSavedIps() async {
     final prefs = await SharedPreferences.getInstance();
-    List<String> ips = prefs.getStringList('saved_ips') ?? [];
-    for (var ip in ips) {
+    _savedIps = prefs.getStringList('saved_ips') ?? [];
+    for (var ip in _savedIps) {
       String? name = _customNames[ip];
       _dlnaService.addForcedDevice(ip, customName: name);
     }
@@ -119,19 +188,19 @@ class DeviceViewLogic {
     final prefs = await SharedPreferences.getInstance();
     String? savedName = _customNames[ip];
     await _dlnaService.verifyAndAddManualDevice(ip, customName: savedName);
-    List<String> ips = prefs.getStringList('saved_ips') ?? [];
-    if (!ips.contains(ip)) {
-      ips.add(ip);
-      await prefs.setStringList('saved_ips', ips);
+
+    if (!_savedIps.contains(ip)) {
+      _savedIps.add(ip);
+      await prefs.setStringList('saved_ips', _savedIps);
     }
   }
 
   Future<void> removeDevice(DlnaDevice device) async {
     final prefs = await SharedPreferences.getInstance();
     _dlnaService.removeDevice(device.ip);
-    List<String> ips = prefs.getStringList('saved_ips') ?? [];
-    ips.remove(device.ip);
-    await prefs.setStringList('saved_ips', ips);
+
+    _savedIps.remove(device.ip);
+    await prefs.setStringList('saved_ips', _savedIps);
   }
 
   // --- Device Actions ---
@@ -153,70 +222,62 @@ class DeviceViewLogic {
 
   // --- ADB ---
   Future<void> launchAppViaAdb(DlnaDevice device) async {
-    print("[DeviceViewLogic] Starting ADB launch...");
+    print("[DeviceViewLogic] Starting ADB launch sequence...");
 
-    // マネージャーから鍵を取得
+    _launchingIps.add(device.ip);
+    if (!_devicesController.isClosed) {
+      _devicesController.add(_processDevices(_dlnaService.currentDevices));
+    }
+
     if (_adbManager.crypto == null) {
       await _adbManager.init();
     }
 
     if (_adbManager.crypto == null) {
+      _launchingIps.remove(device.ip);
+      _devicesController.add(_processDevices(_dlnaService.currentDevices));
       throw Exception("ADB Crypto init failed");
     }
 
-    // 常に同じ鍵インスタンスを使用
     var connection = AdbConnection(device.ip, 5555, _adbManager.crypto!);
 
-    bool isConnected = false;
-    int retryCount = 0;
-    const maxRetries = 3;
-
     try {
+      bool isConnected = false;
+      int retryCount = 0;
+      const maxRetries = 3;
+
       while (!isConnected && retryCount < maxRetries) {
         print("[DeviceViewLogic] Connecting to ${device.ip}:5555 (Attempt ${retryCount + 1})...");
         try {
           isConnected = await connection.connect();
           if (!isConnected) {
-            print("[DeviceViewLogic] Connect returned false. Waiting...");
             await Future.delayed(const Duration(seconds: 2));
           }
         } catch (e) {
-          print("[DeviceViewLogic] Connect error: $e. Retrying...");
           await Future.delayed(const Duration(seconds: 2));
         }
         retryCount++;
       }
 
       if (isConnected) {
-        print("[DeviceViewLogic] Connected! Attempting to launch Kodi...");
+        print("[DeviceViewLogic] Connected! Sending launch commands...");
 
-        // 作戦A: am start .Splash + スペース
-        print("[DeviceViewLogic] Try 1: am start .Splash");
         var stream1 = await connection.open("shell:am start -n org.xbmc.kodi/.Splash ");
-        var output1 = await stream1.onPayload.cast<List<int>>().transform(utf8.decoder).join();
-        print("[Output 1] $output1");
+        await stream1.onPayload.drain();
 
-        if (output1.toLowerCase().contains("error") || output1.toLowerCase().contains("does not exist")) {
-          // 作戦B: am start .Main + スペース
-          print("[DeviceViewLogic] Try 2: am start .Main");
-          await Future.delayed(const Duration(milliseconds: 500));
-          var stream2 = await connection.open("shell:am start -n org.xbmc.kodi/.Main ");
-          var output2 = await stream2.onPayload.cast<List<int>>().transform(utf8.decoder).join();
-          print("[Output 2] $output2");
+        await Future.delayed(const Duration(milliseconds: 500));
 
-          if (output2.toLowerCase().contains("error") || output2.toLowerCase().contains("does not exist")) {
-            // 作戦C: monkey + スペース
-            print("[DeviceViewLogic] Try 3: monkey");
-            await Future.delayed(const Duration(milliseconds: 500));
-            var stream3 = await connection.open("shell:monkey -p org.xbmc.kodi -v 1 ");
-            var output3 = await stream3.onPayload.cast<List<int>>().transform(utf8.decoder).join();
-            print("[Output 3] $output3");
-          }
-        }
+        var stream2 = await connection.open("shell:am start -n org.xbmc.kodi/.Main ");
+        await stream2.onPayload.drain();
 
-        await Future.delayed(const Duration(seconds: 2));
         await connection.disconnect();
-        print("[DeviceViewLogic] Disconnected.");
+        print("[DeviceViewLogic] Commands sent. Waiting for startup...");
+
+        // 待ち時間を少し延長（念のため）
+        await Future.delayed(const Duration(seconds: 5));
+
+        print("[DeviceViewLogic] Checking status...");
+        await _checkKodiStatus(device);
 
       } else {
         print("[DeviceViewLogic] Failed to connect.");
@@ -225,8 +286,12 @@ class DeviceViewLogic {
 
     } catch (e) {
       print("[DeviceViewLogic] ADB Error: $e");
-      try { await connection.disconnect(); } catch (_) {}
       rethrow;
+    } finally {
+      _launchingIps.remove(device.ip);
+      if (!_devicesController.isClosed) {
+        _devicesController.add(_processDevices(_dlnaService.currentDevices));
+      }
     }
   }
 }

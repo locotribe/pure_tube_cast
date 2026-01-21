@@ -10,28 +10,17 @@ class DeviceView extends StatefulWidget {
   State<DeviceView> createState() => _DeviceViewState();
 }
 
-class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
+class _DeviceViewState extends State<DeviceView> {
   final DeviceViewLogic _logic = DeviceViewLogic();
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _logic.init().then((_) {
-      _logic.startSearch();
-    });
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _logic.startSearch();
-    }
+    _logic.init();
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _logic.dispose();
     super.dispose();
   }
@@ -240,7 +229,7 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
                               ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                               : const Icon(Icons.check_circle, color: Colors.green, size: 20),
                           const SizedBox(width: 10),
-                          Text(isSearching ? "検索中..." : "$count台 見つかりました"),
+                          Text(isSearching ? "検索中..." : "$count台 表示中"),
                         ],
                       );
                     },
@@ -249,7 +238,24 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
               ),
               Row(
                 children: [
-                  IconButton(icon: const Icon(Icons.refresh), onPressed: _logic.startSearch, tooltip: "再検索"),
+                  ValueListenableBuilder<bool>(
+                    valueListenable: _logic.isSearching,
+                    builder: (context, isSearching, child) {
+                      if (isSearching) {
+                        return IconButton(
+                          icon: const Icon(Icons.refresh, color: Colors.grey),
+                          onPressed: null,
+                          tooltip: "検索中",
+                        );
+                      } else {
+                        return IconButton(
+                          icon: const Icon(Icons.search),
+                          onPressed: _logic.startSearch,
+                          tooltip: "検索開始",
+                        );
+                      }
+                    },
+                  ),
                   IconButton(icon: const Icon(Icons.add), onPressed: _showAddIpDialog, tooltip: "手動追加"),
                 ],
               ),
@@ -267,7 +273,9 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
               final devices = snapshot.data ?? [];
 
               if (devices.isEmpty) {
-                return const Center(child: Text("デバイスが見つかりません"));
+                return const Center(
+                  child: Text("検索ボタンを押してデバイスを探してください"),
+                );
               }
 
               return StreamBuilder<DlnaDevice?>(
@@ -292,7 +300,6 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              // --- 上段：情報エリア（タップで接続/切断） ---
                               InkWell(
                                 onTap: () => _onDeviceTap(device, isConnected),
                                 child: Row(
@@ -359,12 +366,28 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
                                   ),
                                   Row(
                                     children: [
-                                      // 【追加】ロケットアイコン (Kodi起動)
-                                      IconButton(
-                                        icon: const Icon(Icons.rocket_launch, size: 20, color: Colors.deepOrange),
-                                        tooltip: "Kodiを起動 (ADB)",
-                                        onPressed: () => _launchApp(device),
-                                      ),
+                                      // 修正: 起動中はインジケータを表示
+                                      if (device.isLaunching)
+                                        const SizedBox(
+                                          width: 40,
+                                          height: 40,
+                                          child: Padding(
+                                            padding: EdgeInsets.all(12.0),
+                                            child: CircularProgressIndicator(strokeWidth: 2),
+                                          ),
+                                        )
+                                      else
+                                        IconButton(
+                                          icon: Icon(
+                                              Icons.rocket_launch,
+                                              size: 20,
+                                              // 起動中なら赤、それ以外はグレー
+                                              color: device.isKodiForeground ? Colors.red : Colors.grey
+                                          ),
+                                          tooltip: "Kodiを起動 (ADB)",
+                                          onPressed: () => _launchApp(device),
+                                        ),
+
                                       IconButton(
                                         icon: const Icon(Icons.edit, size: 20, color: Colors.grey),
                                         onPressed: () => _showRenameDialog(device),

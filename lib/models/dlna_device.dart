@@ -1,3 +1,5 @@
+// lib/models/dlna_device.dart
+
 class DlnaDevice {
   final String ip;
   final String name;
@@ -7,6 +9,8 @@ class DlnaDevice {
   final int port;
   final bool isManual;
   final String? macAddress;
+  final bool isKodiForeground;
+  final bool isLaunching; // 追加: 起動コマンド送信中フラグ
 
   DlnaDevice({
     required this.ip,
@@ -17,6 +21,8 @@ class DlnaDevice {
     required this.port,
     this.isManual = false,
     this.macAddress,
+    this.isKodiForeground = false,
+    this.isLaunching = false, // 追加: デフォルトはfalse
   });
 
   DlnaDevice copyWith({
@@ -27,6 +33,8 @@ class DlnaDevice {
     int? port,
     bool? isManual,
     String? macAddress,
+    bool? isKodiForeground,
+    bool? isLaunching, // 追加
   }) {
     return DlnaDevice(
       ip: ip,
@@ -37,6 +45,8 @@ class DlnaDevice {
       port: port ?? this.port,
       isManual: isManual ?? this.isManual,
       macAddress: macAddress ?? this.macAddress,
+      isKodiForeground: isKodiForeground ?? this.isKodiForeground,
+      isLaunching: isLaunching ?? this.isLaunching, // 追加
     );
   }
 }

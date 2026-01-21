@@ -16,20 +16,27 @@ class DlnaDiscoveryService {
 
   // スキャンセッション管理ID
   int _currentScanSessionId = 0;
+  // 追加: 今回のセッションで確認できたIPのセット
+  final Set<String> _verifiedIps = {};
 
   final Set<String> _foundLocations = {};
-  final Set<String> _manualIps = {};
+  final Set<String> _manualIps = {}; // 手動追加されたIP（削除対象外にするため保持）
 
   List<DlnaDevice> get currentDevices => List.unmodifiable(_devices);
 
   /// 検索開始
   void startSearch({int durationSec = 30}) {
-    stopSearch();
+    stopSearch(); // 前回の検索を停止
     _currentScanSessionId++;
     final int mySessionId = _currentScanSessionId;
 
     _isSearching = true;
+    _verifiedIps.clear(); // 確認済みセットをリセット
     print("[Discovery] === 検索を開始しました (ID: $mySessionId, タイムアウト: ${durationSec}秒) ===");
+
+    // 1. 既存デバイスへのPing（生存確認）を開始
+    // これにより、SSDPが来なくても稼働中のデバイスはリストに残る
+    _pingExistingDevices(mySessionId);
 
     _setupSocket();
     _searchLoop(mySessionId);
@@ -42,10 +49,39 @@ class DlnaDiscoveryService {
 
     Timer(Duration(seconds: durationSec), () {
       if (_isSearching && _currentScanSessionId == mySessionId) {
-        print("[Discovery] タイムアウトにより検索状態を終了します");
+        print("[Discovery] タイムアウト: 検索終了処理を実行します");
+        _finalizeSearch(); // 追加: 削除処理など
         _isSearching = false;
+        stopSearch();
       }
     });
+  }
+
+  // 追加: 検索終了時の処理
+  void _finalizeSearch() {
+    // リストにあるが、今回のセッションでVerifiedされなかった、かつ手動追加でないものを削除
+    final initialCount = _devices.length;
+    _devices.removeWhere((device) {
+      if (device.isManual) return false; // 手動追加は消さない
+      if (_verifiedIps.contains(device.ip)) return false; // 確認できたものは消さない
+
+      print("[Discovery] 削除: ${device.name} (${device.ip}) - 応答なし");
+      return true; // 削除
+    });
+
+    if (_devices.length != initialCount) {
+      _deviceStreamController.add(List.from(_devices));
+    }
+  }
+
+  // 追加: 既存デバイスへの生存確認
+  Future<void> _pingExistingDevices(int sessionId) async {
+    final currentList = List<DlnaDevice>.from(_devices);
+    for (var device in currentList) {
+      if (_currentScanSessionId != sessionId) return;
+      // 既存のチェックロジックを流用
+      await _checkLanDevice(device.ip, sessionId, customName: null, isManual: device.isManual);
+    }
   }
 
   /// 検索停止
@@ -61,9 +97,17 @@ class DlnaDiscoveryService {
 
   /// 手動IPの登録
   Future<void> verifyAndAddManualDevice(String ip, {String? customName}) async {
-    if (_devices.any((d) => d.ip == ip)) return;
+    if (!_manualIps.contains(ip)) _manualIps.add(ip); // 手動リストに追加
+    // 既存にあれば手動フラグを更新
+    final index = _devices.indexWhere((d) => d.ip == ip);
+    if (index != -1) {
+      _devices[index] = _devices[index].copyWith(isManual: true);
+    }
+
     print("[Discovery] 手動追加IPを確認中: $ip");
-    _checkLanDevice(ip, _currentScanSessionId, customName: customName, isManual: true);
+    // 手動追加はセッションIDに関係なく実行(強制0などにするか、currentを使う)
+    // ここでは現在のセッションIDを使ってチェックするが、isManual=trueで通す
+    await _checkLanDevice(ip, _currentScanSessionId, customName: customName, isManual: true);
   }
 
   /// デバイス名の更新
@@ -76,9 +120,26 @@ class DlnaDiscoveryService {
     }
   }
 
-  /// 強制追加
+  /// 強制追加 (保存済みIPの読み込み時など)
   void addForcedDevice(String ip, {String? customName}) {
-    if (_devices.any((d) => d.ip == ip)) return;
+    if (!_manualIps.contains(ip)) _manualIps.add(ip);
+
+    // まだリストになければ仮追加しておく
+    if (!_devices.any((d) => d.ip == ip)) {
+      final device = DlnaDevice(
+        ip: ip,
+        name: customName ?? "Saved Device ($ip)",
+        originalName: "",
+        controlUrl: "",
+        serviceType: "lan",
+        port: 0,
+        isManual: true,
+      );
+      _devices.add(device);
+      _deviceStreamController.add(List.from(_devices));
+    }
+
+    // 確認は非同期で
     _checkLanDevice(ip, _currentScanSessionId, customName: customName, isManual: true);
   }
 
@@ -93,6 +154,9 @@ class DlnaDiscoveryService {
   // --- Internal ---
 
   void _addDevice(DlnaDevice device) {
+    // 追加: 今回のセッションで確認できたIPとしてマーク
+    _verifiedIps.add(device.ip);
+
     final index = _devices.indexWhere((d) => d.ip == device.ip);
 
     if (index != -1) {
@@ -100,7 +164,7 @@ class DlnaDiscoveryService {
 
       String newName = existing.name;
 
-      // 【修正】Kodi(...) などの汎用名判定を強化し、Fire TV等の名前で確実に上書きする
+      // KODI等の汎用名判定と上書きロジック
       bool isExistingGeneric = _isGenericName(existing.name);
       bool isNewFireTv = device.name.contains("Fire TV") || device.name.contains("Cast");
 
@@ -124,6 +188,8 @@ class DlnaDiscoveryService {
         port: newPort,
         serviceType: newServiceType,
         controlUrl: newControlUrl,
+        // 手動フラグは維持、あるいは今回のdeviceがManualならTrue
+        isManual: existing.isManual || device.isManual,
       );
     } else {
       print("[Discovery] ★デバイス追加: ${device.name} (${device.ip})");
@@ -183,12 +249,11 @@ class DlnaDiscoveryService {
     } catch (_) {}
   }
 
-  // 指定IPの調査
+// 指定IPの調査
   Future<void> _checkLanDevice(String ip, int sessionId, {String? customName, bool isManual = false}) async {
     if (!isManual && _currentScanSessionId != sessionId) return;
 
-    // 【追加】ルーター (末尾 .1) を除外
-    if (ip.endsWith('.1')) return;
+    if (ip.endsWith('.1')) return; // ルーター除外
 
     String? hostname;
     String? kodiSystemName;
