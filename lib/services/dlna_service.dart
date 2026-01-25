@@ -305,12 +305,22 @@ class DlnaService {
 
   Future<void> _checkPortOpen(String ip) async {
     if (_foundDevices.any((d) => d.ip == ip)) return;
+
     try {
       final socket = await Socket.connect(ip, 8080, timeout: const Duration(milliseconds: 1000));
       socket.destroy();
-      _addFallbackDevice(ip, port: 8080, customName: "Kodi? ($ip)");
+      _addFallbackDevice(ip, port: 8080, customName: "FireTV/Kodi");
       _fetchDeviceInfo('http://$ip:8080/description.xml', ip);
-    } catch (e) { }
+      return;
+    } catch (e) {
+    }
+
+    try {
+      final socket = await Socket.connect(ip, 5555, timeout: const Duration(milliseconds: 1000));
+      socket.destroy();
+      _addFallbackDevice(ip, port: 5555, customName: "FireTV/ADB");
+    } catch (e) {
+    }
   }
 
   // 接続チェック強化版
