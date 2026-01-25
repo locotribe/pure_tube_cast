@@ -1,10 +1,13 @@
+// lib/views/web_video_view.dart
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../managers/site_manager.dart';
 import '../models/site_model.dart';
 
 class WebVideoView extends StatelessWidget {
-  const WebVideoView({super.key});
+  final VoidCallback? onAddSite;
+
+  const WebVideoView({super.key, this.onAddSite});
 
   @override
   Widget build(BuildContext context) {
@@ -27,7 +30,8 @@ class WebVideoView extends StatelessWidget {
                   mainAxisSpacing: 16,
                   childAspectRatio: 1.3,
                 ),
-                itemCount: 1 + sites.length,
+                // YouTube(1) + 登録サイト(n) + 追加ボタン(1)
+                itemCount: 1 + sites.length + 1,
                 itemBuilder: (context, index) {
                   if (index == 0) {
                     // YouTube (固定)
@@ -38,6 +42,9 @@ class WebVideoView extends StatelessWidget {
                       fixedIcon: Icons.play_circle_fill,
                       fixedColor: Colors.red,
                     );
+                  } else if (index == 1 + sites.length) {
+                    // 追加ボタン (末尾)
+                    return _buildAddButton(context);
                   } else {
                     final site = sites[index - 1];
                     return _buildSiteCard(
@@ -52,6 +59,42 @@ class WebVideoView extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+
+  // 【追加】サイト追加ボタンのデザイン
+  Widget _buildAddButton(BuildContext context) {
+    return InkWell(
+      onTap: onAddSite,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        decoration: BoxDecoration(
+          // カードと同じ背景色だが、区別するために少し透明度を変える等の調整も可能
+          color: Theme.of(context).cardColor.withOpacity(0.5),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: Theme.of(context).dividerColor,
+            width: 1.5,
+          ),
+        ),
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.add_circle_outline, size: 48, color: Theme.of(context).disabledColor),
+              const SizedBox(height: 8),
+              Text(
+                "サイトを追加",
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  color: Theme.of(context).disabledColor,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

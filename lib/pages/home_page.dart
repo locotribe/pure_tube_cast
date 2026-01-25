@@ -1,3 +1,4 @@
+// lib/pages/home_page.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
@@ -8,8 +9,7 @@ import '../views/device_view.dart';
 import '../views/web_video_view.dart';
 import '../views/library_view.dart';
 import '../managers/site_manager.dart';
-import '../managers/playlist_manager.dart'; // PlaylistManager追加
-import '../pages/playlist_page.dart';
+import '../managers/playlist_manager.dart';
 import 'cast_page.dart';
 import 'settings_page.dart';
 
@@ -24,7 +24,7 @@ class _HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
   StreamSubscription? _intentStreamSubscription;
   final SiteManager _siteManager = SiteManager();
-  final PlaylistManager _playlistManager = PlaylistManager(); // 追加
+  final PlaylistManager _playlistManager = PlaylistManager();
 
   @override
   void initState() {
@@ -37,8 +37,6 @@ class _HomePageState extends State<HomePage> {
     _intentStreamSubscription?.cancel();
     super.dispose();
   }
-
-
 
   void _setupSharingListener() {
     _intentStreamSubscription = ReceiveSharingIntent.instance.getMediaStream().listen(
@@ -53,7 +51,6 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  // 【改修】ミックスリスト対策を含む自動判定ロジック
   void _handleSharedText(String url) {
     if (!mounted) return;
 
@@ -151,11 +148,7 @@ class _HomePageState extends State<HomePage> {
 
     if (newId != null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("プレイリストを取り込みました")));
-      setState(() => _selectedIndex = 1);
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (context) => PlaylistPage(playlistId: newId)),
-      );
+      setState(() => _selectedIndex = 1); // ライブラリタブへ切り替え
     } else {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("プレイリストの取得に失敗しました")));
     }
@@ -298,7 +291,7 @@ class _HomePageState extends State<HomePage> {
         title: const Text("PureTube Cast"),
         elevation: 0,
         actions: [
-          // 【追加】設定ボタン
+          // 設定ボタン
           IconButton(
             icon: const Icon(Icons.settings),
             tooltip: "設定",
@@ -309,54 +302,39 @@ class _HomePageState extends State<HomePage> {
               );
             },
           ),
-          // 既存の追加ボタンはWebタブの時のみ表示などの制御があれば調整
-          if (_selectedIndex == 0)
-            IconButton(
-              icon: const Icon(Icons.add_link),
-              tooltip: "サイトを追加",
-              onPressed: () => _showAddSiteDialog(),
-            ),
+          // 【修正】サイト追加ボタン (AppBarからは削除)
         ],
       ),
       resizeToAvoidBottomInset: false,
-      body: Column(
+      body: IndexedStack(
+        index: _selectedIndex,
         children: [
-          Container(
-            color: Theme.of(context).primaryColor.withOpacity(0.05),
-            child: Row(
-              children: [
-                _buildTabItem(0, Icons.public, "動画サイト"),
-                _buildTabItem(1, Icons.folder_copy, "ライブラリ"),
-                _buildTabItem(2, Icons.settings_remote, "接続"),
-              ],
-            ),
-          ),
-          Expanded(
-            child: IndexedStack(
-              index: _selectedIndex,
-              children: const [
-                WebVideoView(),
-                LibraryView(),
-                DeviceView(),
-              ],
-            ),
-          ),
+          // 【修正】WebVideoViewに追加ダイアログのコールバックを渡す
+          WebVideoView(onAddSite: () => _showAddSiteDialog()),
+          const LibraryView(),
+          const DeviceView(),
         ],
       ),
-    );
-  }
-
-  Widget _buildTabItem(int index, IconData icon, String label) {
-    final bool isSelected = _selectedIndex == index;
-    final Color color = isSelected ? Colors.red : Colors.grey;
-    return Expanded(
-      child: InkWell(
-        onTap: () => setState(() => _selectedIndex = index),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: isSelected ? Colors.red : Colors.transparent, width: 3))),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: color), const SizedBox(height: 4), Text(label, style: TextStyle(color: color, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal, fontSize: 12))]),
-        ),
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _selectedIndex,
+        onTap: (index) => setState(() => _selectedIndex = index),
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.public),
+            label: "動画サイト",
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.folder_copy),
+            label: "ライブラリ",
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.settings_remote),
+            label: "接続",
+          ),
+        ],
+        selectedItemColor: Colors.red,
+        unselectedItemColor: Colors.grey,
+        type: BottomNavigationBarType.fixed,
       ),
     );
   }

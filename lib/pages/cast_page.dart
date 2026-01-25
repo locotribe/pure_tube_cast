@@ -1,3 +1,4 @@
+// lib/pages/cast_page.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // MethodChannel用
 import 'package:url_launcher/url_launcher.dart';
@@ -5,7 +6,6 @@ import 'package:url_launcher/url_launcher.dart';
 import '../managers/playlist_manager.dart';
 import '../services/dlna_service.dart';
 import '../services/video_resolver.dart';
-import 'playlist_page.dart';
 
 class CastPage extends StatefulWidget {
   final String? initialUrl;
@@ -178,13 +178,11 @@ class _CastPageState extends State<CastPage> {
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("リストに追加しました")),
+        const SnackBar(content: Text("リストに追加しました。ライブラリで確認してください")),
       );
 
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => PlaylistPage(playlistId: targetId)),
-      );
+      // 旧: PlaylistPageへ遷移 -> 新: HomePageへ戻る
+      Navigator.pop(context);
     }
   }
 
@@ -205,10 +203,6 @@ class _CastPageState extends State<CastPage> {
     setState(() => _isLoading = true);
 
     try {
-      // Kodiにも追加して再生する処理
-      // 注: processAndAddは非同期でURL解決するため、streamUrlが確定するのを待つ必要があるが、
-      // ここでは簡易的に resolver で再度URL解決して即Kodiに投げる
-
       final streamUrl = await _resolver.resolveStreamUrl(_videoMetadata!);
 
       if (streamUrl != null) {
@@ -220,29 +214,7 @@ class _CastPageState extends State<CastPage> {
             _videoMetadata!['thumbnailUrl']
         );
 
-        // Kodiのリストの最後尾（今追加したもの）を再生
-        // ※正確な同期には課題があるが、ここでは「追加して再生」を実現する
-        // Kodi側のプレイリストサイズを取得する手段がないため、
-        // 「プレイリストをクリアして再生」するか、「とりあえず再生」か迷うが、
-        // ユーザーの意向は「リストに追加して再生」なので、クリアはしない。
-        // ただし、位置指定(Player.Open)が難しいので、単純に PlayNow(Clear+Add) してしまうのが一番確実ではある。
-        // しかし仕様としては「リストの最後尾に追加」なので...
-        // ここでは「PlayNow (Clear & Add)」方式を採用せず、「Kodiにも追加し、可能なら再生」を試みる。
-        // ただ、位置が不明なため、今回は安全策として「addToPlaylist」のみ行い、ユーザーに再生を委ねるか、
-        // あるいは割り切って「その動画を単体再生(PlayNow)」するか。
-
-        // 結論: 前回の仕様通り「リストの最後尾に追加して再生」を目指すが、
-        // 複雑さを避けるため、ここではDlnaServiceのPlayNow（上書き再生）を使う方が
-        // 「今すぐ再生」の挙動として自然かもしれない。
-        // いえ、ユーザーは「リストの最後に」と言っていたので、
-        // アプリ内リストは最後尾、KodiへもAdd、そしてKodiへPlayer.Open(position: 後ろ)を送りたいが...
-        // Positionがわからないので、今回は【アプリ内リストに追加 -> そのリスト画面へ遷移】し、
-        // 「再生はリスト画面から行ってください（ハイライト等はしない）」とするか、
-        // あるいは playNow (単発再生) して、アプリ内リストにも残す、とする。
-
-        // ★修正方針: アプリ内リストには追加済み。
-        // Kodiに対しては、強制的に「この動画を再生」させる（PlayNowメソッド使用）。
-        // これによりKodi側のリストはクリアされるが、「今すぐ見る」目的は果たせる。
+        // Kodiに対して即時再生を要求
         await _dlnaService.playNow(
             currentDevice,
             streamUrl,
@@ -262,10 +234,10 @@ class _CastPageState extends State<CastPage> {
 
     if (mounted) {
       setState(() => _isLoading = false);
-      // 該当のプレイリスト画面へ移動
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => PlaylistPage(playlistId: targetId)),
+      // 旧: PlaylistPageへ遷移 -> 新: HomePageへ戻る
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("再生を開始しました"))
       );
     }
   }
@@ -296,10 +268,8 @@ class _CastPageState extends State<CastPage> {
                 Container(
                   width: double.infinity,
                   decoration: BoxDecoration(
-                    // 【修正】背景色をテーマに合わせて変更 (Surface Variantなど)
                     color: Theme.of(context).colorScheme.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(12),
-                    // 【修正】ボーダーもテーマ依存または削除
                     border: Border.all(color: Theme.of(context).dividerColor),
                   ),
                   clipBehavior: Clip.antiAlias,
@@ -330,7 +300,6 @@ class _CastPageState extends State<CastPage> {
                             Text(
                               _videoMetadata?['title'] ?? "読み込み中...",
                               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                              // 色指定を削除すれば自動で白/黒になる
                             ),
                             const SizedBox(height: 5),
                             Text(_statusMessage, style: const TextStyle(color: Colors.grey)),
