@@ -2,7 +2,7 @@
   description: "YouTube caster for old devices"
   publish_to: 'none'
 
-  version: 1.13.0+1
+  version: 1.13.1+1
 
   environment:
     sdk: ^3.5.3
@@ -35,4 +35,4 @@
     flutter_lints: ^5.0.0
 
   flutter:
-  uses-material-design: true
+    uses-material-design: true

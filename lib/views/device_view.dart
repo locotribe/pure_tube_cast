@@ -35,13 +35,11 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
     if (_dlnaService.currentDevice != null) {
       _selectedDeviceIp = _dlnaService.currentDevice!.ip;
     }
-    _loadSettingsAndStart();
+    _loadSettings();
 
-    // 【修正1】 devicesStream -> deviceStream
     _deviceListSubscription = _dlnaService.deviceStream.listen((devices) {
       if (mounted) {
         setState(() {
-          // ここで一度生データを保存してからカスタム設定を適用する
           _devices = devices;
           _applyCustomSettings();
         });
@@ -57,7 +55,7 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  Future<void> _loadSettingsAndStart() async {
+  Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     final namesString = prefs.getString('custom_device_names');
     if (namesString != null) {
@@ -75,8 +73,6 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
         print("Error loading custom macs: $e");
       }
     }
-
-    _startSearch();
   }
 
   Future<void> _saveSettings() async {
@@ -301,7 +297,20 @@ class _DeviceViewState extends State<DeviceView> with WidgetsBindingObserver {
 
         Expanded(
           child: _devices.isEmpty
-              ? const Center(child: Text("デバイスが見つかりません"))
+              ? Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: const [
+                Icon(Icons.touch_app, size: 60, color: Colors.grey),
+                SizedBox(height: 16),
+                Text(
+                  "右上の検索ボタンを押して\nデバイスを探してください",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey, fontSize: 16),
+                ),
+              ],
+            ),
+          )
               : ListView.builder(
             itemCount: _devices.length,
             itemBuilder: (context, index) {
