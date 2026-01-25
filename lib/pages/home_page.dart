@@ -11,7 +11,7 @@ import '../views/library_view.dart';
 import '../managers/site_manager.dart';
 import '../managers/playlist_manager.dart';
 import 'cast_page.dart';
-import 'settings_page.dart';
+import '../managers/theme_manager.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -286,24 +286,81 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+
+    final themeManager = ThemeManager();
+
     return Scaffold(
       appBar: AppBar(
         title: const Text("PureTube Cast"),
         elevation: 0,
         actions: [
-          // 設定ボタン
-          IconButton(
-            icon: const Icon(Icons.settings),
-            tooltip: "設定",
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const SettingsPage()),
-              );
-            },
-          ),
-          // 【修正】サイト追加ボタン (AppBarからは削除)
+          // 設定ボタンを削除しました
         ],
+      ),
+      // ハンバーガーメニュー (ドロワー) を追加
+      drawer: Drawer(
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            // ドロワーヘッダー (アプリ名など)
+            DrawerHeader(
+              decoration: BoxDecoration(
+                color: Theme.of(context).primaryColor,
+              ),
+              child: const Center(
+                child: Text(
+                  'PureTube Cast',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+            // 設定メニュー (アコーディオン形式)
+            ExpansionTile(
+              leading: const Icon(Icons.settings),
+              title: const Text("設定"),
+              initiallyExpanded: false, // 最初は閉じておく
+              children: [
+                // SettingsPageにあったStreamBuilderロジックをここに移植
+                StreamBuilder<ThemeMode>(
+                  stream: themeManager.themeStream,
+                  initialData: themeManager.currentThemeMode,
+                  builder: (context, snapshot) {
+                    final currentMode = snapshot.data ?? ThemeMode.system;
+                    return Column(
+                      children: [
+                        RadioListTile<ThemeMode>(
+                          title: const Text("ライトモード"),
+                          secondary: const Icon(Icons.wb_sunny),
+                          value: ThemeMode.light,
+                          groupValue: currentMode,
+                          onChanged: (value) => themeManager.setThemeMode(value!),
+                        ),
+                        RadioListTile<ThemeMode>(
+                          title: const Text("ダークモード"),
+                          secondary: const Icon(Icons.nightlight_round),
+                          value: ThemeMode.dark,
+                          groupValue: currentMode,
+                          onChanged: (value) => themeManager.setThemeMode(value!),
+                        ),
+                        RadioListTile<ThemeMode>(
+                          title: const Text("システムのデフォルト"),
+                          secondary: const Icon(Icons.settings_brightness),
+                          value: ThemeMode.system,
+                          groupValue: currentMode,
+                          onChanged: (value) => themeManager.setThemeMode(value!),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
       resizeToAvoidBottomInset: false,
       body: IndexedStack(
