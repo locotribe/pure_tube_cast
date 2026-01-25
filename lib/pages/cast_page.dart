@@ -178,11 +178,11 @@ class _CastPageState extends State<CastPage> {
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("リストに追加しました。ライブラリで確認してください")),
+        const SnackBar(content: Text("リストに追加しました")),
       );
 
-      // 旧: PlaylistPageへ遷移 -> 新: HomePageへ戻る
-      Navigator.pop(context);
+      // 【修正】追加したリストIDを戻り値として返す
+      Navigator.pop(context, targetId);
     }
   }
 
@@ -258,7 +258,7 @@ class _CastPageState extends State<CastPage> {
       children: [
         Scaffold(
           appBar: AppBar(
-            title: const Text("カートに追加"),
+            title: const Text("動画の確認 "),
             leading: IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
           ),
           body: SingleChildScrollView(

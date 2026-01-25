@@ -11,6 +11,7 @@ import '../views/library_view.dart';
 import '../managers/site_manager.dart';
 import '../managers/playlist_manager.dart';
 import 'cast_page.dart';
+// settings_page.dart を削除し、テーママネージャーを追加
 import '../managers/theme_manager.dart';
 
 class HomePage extends StatefulWidget {
@@ -25,6 +26,9 @@ class _HomePageState extends State<HomePage> {
   StreamSubscription? _intentStreamSubscription;
   final SiteManager _siteManager = SiteManager();
   final PlaylistManager _playlistManager = PlaylistManager();
+
+  // 【追加】LibraryViewを外部から操作するためのキー
+  final GlobalKey<LibraryViewState> _libraryKey = GlobalKey();
 
   @override
   void initState() {
@@ -118,11 +122,22 @@ class _HomePageState extends State<HomePage> {
 
   // --- 各アクション ---
 
-  void _navigateToCastPage(String url) {
-    Navigator.push(
+  // 【修正】戻り値を受け取り、ライブラリへ遷移するロジックを追加
+  void _navigateToCastPage(String url) async {
+    final result = await Navigator.push(
       context,
       MaterialPageRoute(builder: (context) => CastPage(initialUrl: url)),
     );
+
+    // CastPageからプレイリストIDが返ってきた場合
+    if (result != null && result is String) {
+      if (!mounted) return;
+      setState(() {
+        _selectedIndex = 1; // ライブラリタブへ切り替え
+      });
+      // ライブラリビュー内の特定のプレイリストを開く
+      _libraryKey.currentState?.openPlaylist(result);
+    }
   }
 
   Future<void> _importPlaylist(String url) async {
@@ -286,7 +301,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-
+    // テーママネージャーのインスタンスを取得
     final themeManager = ThemeManager();
 
     return Scaffold(
@@ -294,27 +309,34 @@ class _HomePageState extends State<HomePage> {
         title: const Text("PureTube Cast"),
         elevation: 0,
         actions: [
-          // 設定ボタンを削除しました
+          // 【修正】設定ボタンを削除（ドロワーに移動）
         ],
       ),
-      // ハンバーガーメニュー (ドロワー) を追加
+      // 【追加】ドロワーメニューの実装
       drawer: Drawer(
         child: ListView(
           padding: EdgeInsets.zero,
           children: [
-            // ドロワーヘッダー (アプリ名など)
             DrawerHeader(
               decoration: BoxDecoration(
+                // アプリのプライマリカラーを使用
                 color: Theme.of(context).primaryColor,
               ),
               child: const Center(
-                child: Text(
-                  'PureTube Cast',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.cast_connected, color: Colors.white, size: 48),
+                    SizedBox(height: 10),
+                    Text(
+                      'PureTube Cast',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -322,9 +344,9 @@ class _HomePageState extends State<HomePage> {
             ExpansionTile(
               leading: const Icon(Icons.settings),
               title: const Text("設定"),
-              initiallyExpanded: false, // 最初は閉じておく
+              initiallyExpanded: false,
               children: [
-                // SettingsPageにあったStreamBuilderロジックをここに移植
+                // SettingsPageの機能をここに統合
                 StreamBuilder<ThemeMode>(
                   stream: themeManager.themeStream,
                   initialData: themeManager.currentThemeMode,
@@ -366,9 +388,9 @@ class _HomePageState extends State<HomePage> {
       body: IndexedStack(
         index: _selectedIndex,
         children: [
-          // 【修正】WebVideoViewに追加ダイアログのコールバックを渡す
           WebVideoView(onAddSite: () => _showAddSiteDialog()),
-          const LibraryView(),
+          // 【修正】キーを渡す
+          LibraryView(key: _libraryKey),
           const DeviceView(),
         ],
       ),

@@ -7,10 +7,12 @@ class LibraryView extends StatefulWidget {
   const LibraryView({super.key});
 
   @override
-  State<LibraryView> createState() => _LibraryViewState();
+  // 【修正】Stateクラスをパブリックに変更したため戻り値の型も変更
+  LibraryViewState createState() => LibraryViewState();
 }
 
-class _LibraryViewState extends State<LibraryView> {
+// 【修正】_LibraryViewState から LibraryViewState へ変更 (外部アクセス用)
+class LibraryViewState extends State<LibraryView> {
   final DlnaService _dlnaService = DlnaService();
   final PlaylistManager _manager = PlaylistManager();
   final ScrollController _scrollController = ScrollController();
@@ -29,7 +31,8 @@ class _LibraryViewState extends State<LibraryView> {
 
   // --- ナビゲーション制御 ---
 
-  void _openPlaylist(String playlistId) {
+  // 【修正】 _openPlaylist から openPlaylist へ変更 (外部アクセス用)
+  void openPlaylist(String playlistId) {
     setState(() {
       _selectedPlaylistId = playlistId;
       _hasInitialScrolled = false;
@@ -484,7 +487,8 @@ class _LibraryViewState extends State<LibraryView> {
                   ),
                 ),
                 subtitle: Text("${playlist.items.length} videos"),
-                onTap: () => _openPlaylist(playlist.id),
+                // 【修正】_openPlaylist -> openPlaylist
+                onTap: () => openPlaylist(playlist.id),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
