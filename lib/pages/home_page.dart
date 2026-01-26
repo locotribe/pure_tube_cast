@@ -12,8 +12,8 @@ import '../managers/site_manager.dart';
 import '../managers/playlist_manager.dart';
 import 'cast_page.dart';
 import '../managers/theme_manager.dart';
-// 【追加】作成したモジュールをインポート
 import '../views/shared_url_modal.dart';
+import '../views/remote_view.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -353,6 +353,7 @@ class _HomePageState extends State<HomePage> {
           WebVideoView(onAddSite: () => _showAddSiteDialog()),
           LibraryView(key: _libraryKey),
           const DeviceView(),
+          const RemoteView(),
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(
@@ -370,6 +371,10 @@ class _HomePageState extends State<HomePage> {
           BottomNavigationBarItem(
             icon: Icon(Icons.settings_remote),
             label: "接続",
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.gamepad),
+            label: "リモコン",
           ),
         ],
         selectedItemColor: Colors.red,

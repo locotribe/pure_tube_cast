@@ -457,4 +457,166 @@ class DlnaService {
       _stopSocketOnly();
     }
   }
+
+
+  // ==========================================
+  // 【追加】リモコン機能用メソッド
+  // ==========================================
+
+  /// リモコン画面用の詳細ステータス取得 (Speed, Volume等を含む)
+  Future<Map<String, dynamic>?> getPlayerPropertiesForRemote(DlnaDevice device) async {
+    try {
+      // 1. プレイヤー状態 (再生位置、速度、合計時間)
+      final playerProps = await _sendJsonRpc(device, "Player.GetProperties", {
+        "playerid": 1,
+        "properties": ["time", "totaltime", "speed", "percentage"]
+      });
+
+      // 2. アプリケーション状態 (音量)
+      final appProps = await _sendJsonRpc(device, "Application.GetProperties", {
+        "properties": ["volume", "muted"]
+      });
+
+      // 3. 現在のアイテム情報
+      final itemProps = await _sendJsonRpc(device, "Player.GetItem", {
+        "playerid": 1,
+        "properties": ["title"]
+      });
+
+      if (playerProps == null || appProps == null) return null;
+
+      // 時間を秒数に変換
+      int currentSec = 0;
+      if (playerProps['time'] != null) {
+        final t = playerProps['time'];
+        currentSec = ((t['hours'] ?? 0) * 3600) + ((t['minutes'] ?? 0) * 60) + (t['seconds'] ?? 0);
+      }
+
+      int totalSec = 0;
+      if (playerProps['totaltime'] != null) {
+        final t = playerProps['totaltime'];
+        totalSec = ((t['hours'] ?? 0) * 3600) + ((t['minutes'] ?? 0) * 60) + (t['seconds'] ?? 0);
+      }
+
+      String title = "";
+      if (itemProps != null && itemProps['item'] != null) {
+        title = itemProps['item']['title'] ?? itemProps['item']['label'] ?? "";
+      }
+
+      return {
+        'time': currentSec,
+        'totaltime': totalSec,
+        'speed': playerProps['speed'] ?? 0,
+        'volume': appProps['volume'] ?? 0,
+        'muted': appProps['muted'] ?? false,
+        'title': title,
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// 再生/一時停止トグル
+  Future<void> togglePlayPause(DlnaDevice device) async {
+    try {
+      await _sendJsonRpc(device, "Player.PlayPause", {"playerid": 1, "play": "toggle"});
+    } catch (e) {
+      print("[DlnaService] togglePlayPause failed: $e");
+    }
+  }
+
+  /// 前の動画へ
+  Future<void> skipPrevious(DlnaDevice device) async {
+    await _sendJsonRpc(device, "Player.GoTo", {"playerid": 1, "to": "previous"});
+  }
+
+  /// 次の動画へ
+  Future<void> skipNext(DlnaDevice device) async {
+    await _sendJsonRpc(device, "Player.GoTo", {"playerid": 1, "to": "next"});
+  }
+
+
+  /// 音量設定 (0-100)
+  Future<void> setVolume(DlnaDevice device, int volume) async {
+    await _sendJsonRpc(device, "Application.SetVolume", {"volume": volume});
+  }
+
+  /// 早送り/巻き戻し (Kodi標準の速度変更: 2x, 4x, 8x... / -2x, -4x...)
+  Future<void> changeSpeed(DlnaDevice device, String direction) async {
+    try {
+      // direction: "increment" or "decrement"
+      await _sendJsonRpc(device, "Player.SetSpeed", {
+        "playerid": 1,
+        "speed": direction
+      });
+    } catch (e) {
+      print("[DlnaService] changeSpeed failed: $e");
+    }
+  }
+  /// 【新規】テンポ変更 (微調整用: 0.1x - 0.25x刻み)
+  /// ※環境によってはスキップ動作になる可能性があります
+  Future<void> changeTempo(DlnaDevice device, String direction) async {
+    try {
+      // direction: "increment" (加速) or "decrement" (減速)
+      String action = direction == "increment" ? "tempoup" : "tempodown";
+      await _sendJsonRpc(device, "Input.ExecuteAction", {"action": action});
+    } catch (e) {
+      print("[DlnaService] changeTempo failed: $e");
+    }
+  }
+
+  /// 速度リセット (等倍速に戻す)
+  Future<void> resetSpeed(DlnaDevice device) async {
+    try {
+      await _sendJsonRpc(device, "Player.SetSpeed", {
+        "playerid": 1,
+        "speed": 1
+      });
+    } catch (e) {
+      print("[DlnaService] resetSpeed failed: $e");
+    }
+  }
+
+  /// 相対時間シーク (パーセント・オブジェクト形式)
+  Future<void> seekRelative(DlnaDevice device, int secondsOffset) async {
+    try {
+      // 1. 現在時間と合計時間を取得
+      final props = await _sendJsonRpc(device, "Player.GetProperties", {
+        "playerid": 1,
+        "properties": ["time", "totaltime"]
+      });
+      if (props == null) return;
+
+      // 2. 秒数に変換
+      final t = props['time'];
+      int currentSec = ((t['hours'] ?? 0) * 3600) + ((t['minutes'] ?? 0) * 60) + (t['seconds'] ?? 0);
+
+      int totalSec = 0;
+      if (props['totaltime'] != null) {
+        final tt = props['totaltime'];
+        totalSec = ((tt['hours'] ?? 0) * 3600) + ((tt['minutes'] ?? 0) * 60) + (tt['seconds'] ?? 0);
+      }
+
+      if (totalSec == 0) return; // ライブ配信などで時間が取れない場合は何もしない
+
+      // 3. ターゲット時間を計算
+      int targetSec = currentSec + secondsOffset;
+      if (targetSec < 0) targetSec = 0;
+      if (targetSec > totalSec) targetSec = totalSec;
+
+      // 4. パーセント計算
+      double progress = (targetSec / totalSec) * 100.0;
+
+      // 5. 送信 (数値を直接送らず、percentageキーを持つオブジェクトとして送る)
+      await _sendJsonRpc(device, "Player.Seek", {
+        "playerid": 1,
+        "value": {
+          "percentage": progress
+        }
+      });
+
+    } catch (e) {
+      print("[DlnaService] Seek error: $e");
+    }
+  }
 }
