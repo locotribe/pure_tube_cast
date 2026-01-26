@@ -658,4 +658,33 @@ class PlaylistManager {
     _saveToStorage();
     _notifyListeners();
   }
+  // 【追加】手動入力によるアイテム追加（解析バイパス）
+  void addManualItem({
+    required String targetPlaylistId,
+    required String title,
+    required String originalUrl,
+    required String streamUrl,
+    String? thumbnailUrl,
+  }) {
+    // ターゲットが見つからない場合は先頭のリストを使用（なければ作成）
+    int pIndex = _playlists.indexWhere((p) => p.id == targetPlaylistId);
+    if (pIndex == -1) {
+      if (_playlists.isEmpty) createPlaylist("メインリスト");
+      pIndex = 0;
+    }
+
+    final newItem = LocalPlaylistItem(
+      title: title,
+      originalUrl: originalUrl,
+      thumbnailUrl: thumbnailUrl,
+      durationStr: "--:--",
+      streamUrl: streamUrl,
+      isResolving: false, // ★ここが重要：解析済み（バイパス）として登録
+      hasError: false,
+    );
+
+    _playlists[pIndex].items.add(newItem);
+    _saveToStorage();
+    _notifyListeners();
+  }
 }

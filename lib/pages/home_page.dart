@@ -11,8 +11,9 @@ import '../views/library_view.dart';
 import '../managers/site_manager.dart';
 import '../managers/playlist_manager.dart';
 import 'cast_page.dart';
-// settings_page.dart を削除し、テーママネージャーを追加
 import '../managers/theme_manager.dart';
+// 【追加】作成したモジュールをインポート
+import '../views/shared_url_modal.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -27,7 +28,6 @@ class _HomePageState extends State<HomePage> {
   final SiteManager _siteManager = SiteManager();
   final PlaylistManager _playlistManager = PlaylistManager();
 
-  // 【追加】LibraryViewを外部から操作するためのキー
   final GlobalKey<LibraryViewState> _libraryKey = GlobalKey();
 
   @override
@@ -65,18 +65,15 @@ class _HomePageState extends State<HomePage> {
     if (uri.host.contains('youtube.com') || uri.host.contains('youtu.be')) {
 
       // A. プレイリスト一括取込判定
-      // listパラメータがあり、かつ "RD" (Mix) で始まらないもの
       if (uri.queryParameters.containsKey('list')) {
         final listId = uri.queryParameters['list']!;
         if (!listId.startsWith('RD')) {
           _importPlaylist(url);
           return;
         }
-        // RD(Mix)の場合は、単体動画として下の処理（C）へ流す
       }
 
       // B. チャンネル・トップ -> サイト登録
-      // @channel, /channel/, またはパス無し
       if (uri.path.startsWith('/@') || uri.path.startsWith('/channel') || uri.path.isEmpty || uri.path == '/') {
         if (_siteManager.isRegistered(url)) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("このサイトは既に登録されています")));
@@ -86,12 +83,11 @@ class _HomePageState extends State<HomePage> {
         return;
       }
 
-      // C. 動画 (vパラメータ, youtu.be, shorts, またはMixリストの動画) -> 動画解析
+      // C. 動画 -> 動画解析
       bool isVideo = false;
       if (uri.queryParameters.containsKey('v')) isVideo = true;
       if (uri.host.contains('youtu.be') && uri.pathSegments.isNotEmpty) isVideo = true;
       if (uri.path.startsWith('/shorts/')) isVideo = true;
-      // Mixリストもここまで来れば動画として扱われる
 
       if (isVideo) {
         _navigateToCastPage(url);
@@ -116,26 +112,38 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
-    // 4. 判定不能 -> 選択メニュー
-    _showSelectionModal(url);
+    // 4. 判定不能 -> 選択メニュー (モジュールへ委譲)
+    // 【修正】_showSelectionModal(url) を削除し、showSharedUrlModal に置き換え
+    showSharedUrlModal(
+      context: context,
+      url: url,
+      onCastFinished: (playlistId) {
+        if (!mounted) return;
+        setState(() {
+          _selectedIndex = 1; // ライブラリタブへ切り替え
+        });
+        _libraryKey.currentState?.openPlaylist(playlistId);
+      },
+      onSiteAdded: () {
+        if (!mounted) return;
+        if (_selectedIndex != 0) setState(() => _selectedIndex = 0);
+      },
+    );
   }
 
   // --- 各アクション ---
 
-  // 【修正】戻り値を受け取り、ライブラリへ遷移するロジックを追加
   void _navigateToCastPage(String url) async {
     final result = await Navigator.push(
       context,
       MaterialPageRoute(builder: (context) => CastPage(initialUrl: url)),
     );
 
-    // CastPageからプレイリストIDが返ってきた場合
     if (result != null && result is String) {
       if (!mounted) return;
       setState(() {
-        _selectedIndex = 1; // ライブラリタブへ切り替え
+        _selectedIndex = 1;
       });
-      // ライブラリビュー内の特定のプレイリストを開く
       _libraryKey.currentState?.openPlaylist(result);
     }
   }
@@ -163,12 +171,13 @@ class _HomePageState extends State<HomePage> {
 
     if (newId != null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("プレイリストを取り込みました")));
-      setState(() => _selectedIndex = 1); // ライブラリタブへ切り替え
+      setState(() => _selectedIndex = 1);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("プレイリストの取得に失敗しました")));
     }
   }
 
+  // WebVideoViewや直接共有で使用するため残す
   Future<void> _fetchInfoAndShowAddDialog(String url) async {
     showDialog(
       context: context,
@@ -205,6 +214,7 @@ class _HomePageState extends State<HomePage> {
     _showAddSiteDialog(initialName: title, initialUrl: url, initialIconUrl: iconUrl);
   }
 
+  // WebVideoViewで使用するため残す
   void _showAddSiteDialog({String? initialName, String? initialUrl, String? initialIconUrl}) {
     final nameController = TextEditingController(text: initialName);
     final urlController = TextEditingController(text: initialUrl);
@@ -256,70 +266,24 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _showSelectionModal(String url) {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Text("共有されたURLの操作", style: TextStyle(fontWeight: FontWeight.bold)),
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.movie_creation, color: Colors.red, size: 32),
-                title: const Text("動画として解析"),
-                subtitle: const Text("動画リストに追加します"),
-                onTap: () {
-                  Navigator.pop(context);
-                  _navigateToCastPage(url);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.public, color: Colors.blue, size: 32),
-                title: const Text("Webサイトとして登録"),
-                subtitle: const Text("タイトルを取得して登録します"),
-                onTap: () {
-                  Navigator.pop(context);
-                  if (_siteManager.isRegistered(url)) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("このサイトは既に登録されています")));
-                    return;
-                  }
-                  _fetchInfoAndShowAddDialog(url);
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
+  // 【削除】_showSelectionModal は shared_url_modal.dart に移行したため削除
 
   @override
   Widget build(BuildContext context) {
-    // テーママネージャーのインスタンスを取得
     final themeManager = ThemeManager();
 
     return Scaffold(
       appBar: AppBar(
         title: const Text("PureTube Cast"),
         elevation: 0,
-        actions: [
-          // 【修正】設定ボタンを削除（ドロワーに移動）
-        ],
+        actions: [],
       ),
-      // 【追加】ドロワーメニューの実装
       drawer: Drawer(
         child: ListView(
           padding: EdgeInsets.zero,
           children: [
             DrawerHeader(
               decoration: BoxDecoration(
-                // アプリのプライマリカラーを使用
                 color: Theme.of(context).primaryColor,
               ),
               child: const Center(
@@ -340,13 +304,11 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
             ),
-            // 設定メニュー (アコーディオン形式)
             ExpansionTile(
               leading: const Icon(Icons.settings),
               title: const Text("設定"),
               initiallyExpanded: false,
               children: [
-                // SettingsPageの機能をここに統合
                 StreamBuilder<ThemeMode>(
                   stream: themeManager.themeStream,
                   initialData: themeManager.currentThemeMode,
@@ -389,7 +351,6 @@ class _HomePageState extends State<HomePage> {
         index: _selectedIndex,
         children: [
           WebVideoView(onAddSite: () => _showAddSiteDialog()),
-          // 【修正】キーを渡す
           LibraryView(key: _libraryKey),
           const DeviceView(),
         ],
