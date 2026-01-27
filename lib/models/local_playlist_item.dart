@@ -1,3 +1,4 @@
+// lib/models/local_playlist_item.dart
 class LocalPlaylistItem {
   final String id;
   final String title;
@@ -5,6 +6,7 @@ class LocalPlaylistItem {
   final String? thumbnailUrl;
   final String durationStr;
   final String? streamUrl;
+  final DateTime? expirationDate; // 追加
 
   // 状態フラグ
   final bool isResolving;
@@ -22,6 +24,7 @@ class LocalPlaylistItem {
     this.thumbnailUrl,
     required this.durationStr,
     this.streamUrl,
+    this.expirationDate, // 追加
     this.isResolving = false,
     this.hasError = false,
     this.isQueued = false,
@@ -35,6 +38,7 @@ class LocalPlaylistItem {
     String? thumbnailUrl,
     String? durationStr,
     String? streamUrl,
+    DateTime? expirationDate, // 追加
     bool? isResolving,
     bool? hasError,
     bool? isQueued,
@@ -47,6 +51,7 @@ class LocalPlaylistItem {
       thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
       durationStr: durationStr ?? this.durationStr,
       streamUrl: streamUrl ?? this.streamUrl,
+      expirationDate: expirationDate ?? this.expirationDate, // 追加
       isResolving: isResolving ?? this.isResolving,
       hasError: hasError ?? this.hasError,
       isQueued: isQueued ?? this.isQueued,
@@ -63,6 +68,7 @@ class LocalPlaylistItem {
       'thumbnailUrl': thumbnailUrl,
       'durationStr': durationStr,
       'streamUrl': streamUrl,
+      'expirationDate': expirationDate?.toIso8601String(), // 追加
       'isResolving': isResolving,
       'hasError': hasError,
     };
@@ -76,6 +82,7 @@ class LocalPlaylistItem {
       thumbnailUrl: json['thumbnailUrl'],
       durationStr: json['durationStr'] ?? "--:--",
       streamUrl: json['streamUrl'],
+      expirationDate: json['expirationDate'] != null ? DateTime.parse(json['expirationDate']) : null, // 追加
       isResolving: json['isResolving'] ?? false,
       hasError: json['hasError'] ?? false,
       isQueued: false,

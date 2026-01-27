@@ -1,3 +1,4 @@
+// lib/managers/playlist_manager.dart
 import 'dart:async';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -259,12 +260,15 @@ class PlaylistManager {
     return count;
   }
 
+// 【修正後】_startMonitor (期間更新ロジックを追加)
   void _startMonitor(DlnaDevice device, String playlistId) {
     _monitorTimer?.cancel();
     _monitorTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
       final status = await DlnaService().getPlayerStatus(device);
       if (status != null) {
         final int kodiPosition = status['position'];
+        // Kodiから総時間(秒)を取得。取れない場合は0
+        final int totalSeconds = status['totalSeconds'] ?? 0;
 
         final pIndex = _playlists.indexWhere((p) => p.id == playlistId);
         if (pIndex != -1) {
@@ -284,10 +288,50 @@ class PlaylistManager {
 
           if (targetAppIndex != null) {
             _syncPlayingStatus(playlistId, targetAppIndex);
+
+            // 【追加】動画時間の自動更新ロジック
+            final currentItem = items[targetAppIndex];
+            // 再生中で、かつ時間が未設定(--:--)の場合のみ更新
+            if (currentItem.isPlaying && currentItem.durationStr == "--:--") {
+              // 誤更新防止: 10秒以上の動画データが取れた場合のみ更新
+              if (totalSeconds > 10) {
+                _updateItemDuration(playlistId, currentItem.id, totalSeconds);
+              }
+            }
           }
         }
       }
     });
+  }
+
+  // 【新規追加】時間を更新して保存するヘルパーメソッド
+  // (クラス内の適当な場所、例えば _startMonitor の直後などに追加してください)
+  void _updateItemDuration(String playlistId, String itemId, int totalSeconds) {
+    final pIndex = _playlists.indexWhere((p) => p.id == playlistId);
+    if (pIndex == -1) return;
+
+    final iIndex = _playlists[pIndex].items.indexWhere((i) => i.id == itemId);
+    if (iIndex == -1) return;
+
+    // 秒数を "MM:SS" または "H:MM:SS" に変換
+    final duration = Duration(seconds: totalSeconds);
+    String durationStr;
+    if (duration.inHours > 0) {
+      durationStr =
+      "${duration.inHours}:${(duration.inMinutes % 60).toString().padLeft(2, '0')}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}";
+    } else {
+      durationStr =
+      "${duration.inMinutes}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}";
+    }
+
+    // 更新 (expirationDateなどの他のフィールドは copyWith で維持される)
+    _playlists[pIndex].items[iIndex] = _playlists[pIndex].items[iIndex].copyWith(
+      durationStr: durationStr,
+    );
+
+    _saveToStorage();
+    _notifyListeners();
+    print("[Manager] Auto-updated duration for '${_playlists[pIndex].items[iIndex].title}': $durationStr");
   }
 
   void _syncPlayingStatus(String playlistId, int playingIndex) {
@@ -712,6 +756,7 @@ class PlaylistManager {
     required String originalUrl,
     required String streamUrl,
     String? thumbnailUrl,
+    DateTime? expirationDate, // 【修正】引数を追加
   }) {
     // ターゲットが見つからない場合は先頭のリストを使用（なければ作成）
     int pIndex = _playlists.indexWhere((p) => p.id == targetPlaylistId);
@@ -726,6 +771,7 @@ class PlaylistManager {
       thumbnailUrl: thumbnailUrl,
       durationStr: "--:--",
       streamUrl: streamUrl,
+      expirationDate: expirationDate, // 【修正】保存用フィールドに渡す
       isResolving: false, // ★ここが重要：解析済み（バイパス）として登録
       hasError: false,
     );
@@ -733,5 +779,62 @@ class PlaylistManager {
     _playlists[pIndex].items.add(newItem);
     _saveToStorage();
     _notifyListeners();
+  }
+
+  // ==========================================================
+  // 【新規追加】重複チェック & リンク更新用メソッド
+  // ==========================================================
+
+  /// WebページURL (originalUrl) で既存アイテムを検索
+  /// 見つかった場合、そのアイテムと所属リストを返す
+  ({PlaylistModel playlist, LocalPlaylistItem item})? findItemByOriginalUrl(String url) {
+    final target = _normalizeUrl(url);
+    for (var playlist in _playlists) {
+      for (var item in playlist.items) {
+        // 末尾スラッシュなどの揺らぎを吸収して比較
+        if (_normalizeUrl(item.originalUrl) == target) {
+          return (playlist: playlist, item: item);
+        }
+      }
+    }
+    return null;
+  }
+
+  /// URLの正規化（末尾スラッシュ削除、トリム）
+  String _normalizeUrl(String url) {
+    var u = url.trim();
+    if (u.endsWith('/')) {
+      u = u.substring(0, u.length - 1);
+    }
+    return u;
+  }
+
+  /// 既存アイテムの動画リンク(streamUrl)と有効期限を更新する
+  void updateItemLink({
+    required String playlistId,
+    required String itemId,
+    required String newStreamUrl,
+    DateTime? newExpirationDate, // nullの場合は有効期限なし(不明)
+  }) {
+    final pIndex = _playlists.indexWhere((p) => p.id == playlistId);
+    if (pIndex == -1) return;
+
+    final iIndex = _playlists[pIndex].items.indexWhere((i) => i.id == itemId);
+    if (iIndex == -1) return;
+
+    final oldItem = _playlists[pIndex].items[iIndex];
+
+    // 更新処理
+    _playlists[pIndex].items[iIndex] = oldItem.copyWith(
+      streamUrl: newStreamUrl,
+      expirationDate: newExpirationDate, // 有効期限を更新
+      // 手動更新したのでエラー/解析中状態はリセット
+      hasError: false,
+      isResolving: false,
+    );
+
+    _saveToStorage();
+    _notifyListeners();
+    print("[Manager] Updated item link for: ${oldItem.title}");
   }
 }

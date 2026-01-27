@@ -1,3 +1,4 @@
+// lib/views/shared_url_modal.dart
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:html/parser.dart' as parser;
@@ -60,6 +61,11 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
   String? _pageIconUrl;
   bool _isFetchingInfo = true;
 
+  // 重複チェック用状態変数
+  LocalPlaylistItem? _existingItem;
+  String? _existingPlaylistId;
+  bool _isUpdateMode = false;
+
   @override
   void initState() {
     super.initState();
@@ -69,6 +75,11 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
     if (_playlistManager.currentPlaylists.isNotEmpty) {
       _selectedPlaylistId = _playlistManager.currentPlaylists.first.id;
     }
+
+    // 描画後に重複チェックを実行
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkDuplicate();
+    });
   }
 
   @override
@@ -77,8 +88,66 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
     super.dispose();
   }
 
+  /// 重複チェックとダイアログ表示
+  void _checkDuplicate() {
+    final match = _playlistManager.findItemByOriginalUrl(widget.url);
+    if (match != null) {
+      setState(() {
+        _existingItem = match.item;
+        _existingPlaylistId = match.playlist.id;
+      });
+      _showDuplicateDialog();
+    }
+  }
+
+  /// 重複警告ダイアログ
+  void _showDuplicateDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text("登録済みです"),
+        content: Text(
+            "この動画は既に登録されています。\n\nタイトル:\n${_existingItem?.title ?? '(不明)'}\n\nリンクの有効期限が切れている場合は「リンクを更新」を選択してください。"),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx); // ダイアログを閉じる
+              Navigator.pop(context); // モーダルを閉じてブラウザ(元画面)へ戻る
+            },
+            child: const Text("閉じる"),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.pop(context);
+              if (_existingPlaylistId != null) {
+                widget.onCastFinished(_existingPlaylistId!); // アプリ内の該当リストへ移動
+              }
+            },
+            child: const Text("アプリで確認"),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              setState(() {
+                _isUpdateMode = true;
+                // 更新モード時は既存のプレイリストを強制選択
+                _selectedPlaylistId = _existingPlaylistId;
+                // タイトルも既存のものを使う（必要であれば）
+                if (_existingItem != null) {
+                  _pageTitle = _existingItem!.title;
+                }
+              });
+            },
+            child: const Text("リンクを更新"),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// 共有されたURL（Webページ）のタイトル等を取得
-  /// 【修正】サムネイル(OGP)を優先して取得するように変更
   Future<void> _fetchPageInfo() async {
     try {
       final response = await http
@@ -99,12 +168,12 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
 
         if (mounted) {
           setState(() {
-            if (title.isNotEmpty) _pageTitle = title;
+            // 更新モードでなければタイトルを更新（更新モードなら既存タイトル維持）
+            if (!_isUpdateMode && title.isNotEmpty) _pageTitle = title;
+
             if (iconLink != null && iconLink.isNotEmpty) {
-              // 相対パス対応 (OGPも相対パスの場合があるためresolveを使用)
               _pageIconUrl = Uri.parse(widget.url).resolve(iconLink!).toString();
             } else {
-              // faviconフォールバック
               _pageIconUrl = Uri.parse(widget.url).resolve('/favicon.ico').toString();
             }
             _isFetchingInfo = false;
@@ -114,22 +183,50 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _pageTitle = "ページ情報の取得に失敗";
+          if (!_isUpdateMode) _pageTitle = "ページ情報の取得に失敗";
           _isFetchingInfo = false;
         });
       }
     }
   }
 
+  /// 【修正】URLパラメータから有効期限を抽出するヘルパー (正規表現版)
+  /// 正規表現を使うことで、URLの構造が複雑でも確実にパラメータ値を拾います
+  DateTime? _parseExpiry(String url) {
+    try {
+      // 正規表現パターン: Expires=数字, expires=数字, e=数字, ttl=数字 などにマッチ
+      // \d+ は数字の連続、caseSensitive: false で大文字小文字を区別しない
+      final regExp = RegExp(r'(?:Expires|expires|expire|e|deadline|ttl)=(\d+)', caseSensitive: false);
+      final match = regExp.firstMatch(url);
+
+      if (match != null) {
+        final val = match.group(1); // 数字部分を取得
+        if (val != null) {
+          final numVal = int.tryParse(val);
+          if (numVal != null) {
+            // Unix Timestamp (秒) か 相対時間 (秒) かを判定
+            // 2000年1月1日 (946684800) より小さければ「相対時間（残り秒数）」とみなす
+            if (numVal < 946684800) {
+              return DateTime.now().add(Duration(seconds: numVal));
+            } else {
+              // Unix Timestamp
+              return DateTime.fromMillisecondsSinceEpoch(numVal * 1000);
+            }
+          }
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
-    // キーボードで隠れないようにパディング調整
     final bottomPadding = MediaQuery.of(context).viewInsets.bottom;
 
     return Container(
       padding: EdgeInsets.fromLTRB(0, 0, 0, bottomPadding),
       constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.85, // 画面の85%まで
+        maxHeight: MediaQuery.of(context).size.height * 0.85,
       ),
       child: SafeArea(
         child: SingleChildScrollView(
@@ -155,8 +252,12 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            _isFetchingInfo ? "ページ情報を取得中..." : _pageTitle,
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                            _isUpdateMode ? "【リンク更新モード】 $_pageTitle" : (_isFetchingInfo ? "ページ情報を取得中..." : _pageTitle),
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                              color: _isUpdateMode ? Colors.orange : null,
+                            ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -174,35 +275,41 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
               ),
               const Divider(height: 1),
 
-              // 1. 通常のアクション（自動解析・サイト登録）
-              ListTile(
-                leading: const Icon(Icons.movie_creation, color: Colors.red),
-                title: const Text("動画として自動解析"),
-                subtitle: const Text("YouTubeや一般的な動画サイト"),
-                onTap: () {
-                  Navigator.pop(context);
-                  _navigateToCastPage();
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.public, color: Colors.blue),
-                title: const Text("Webサイトとして登録"),
-                onTap: () {
-                  Navigator.pop(context);
-                  _handleSiteRegistration();
-                },
-              ),
+              // 更新モードでない場合のみ表示
+              if (!_isUpdateMode) ...[
+                ListTile(
+                  leading: const Icon(Icons.movie_creation, color: Colors.red),
+                  title: const Text("動画として自動解析"),
+                  subtitle: const Text("YouTubeや一般的な動画サイト"),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _navigateToCastPage();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.public, color: Colors.blue),
+                  title: const Text("Webサイトとして登録"),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _handleSiteRegistration();
+                  },
+                ),
+                const Divider(),
+              ],
 
-              const Divider(),
-
-              // 2. 手動登録エリア（新機能）
+              // 手動登録 / 更新 エリア
               Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text("抽出したURLを手動登録 (解析スキップ)",
-                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
+                    Text(
+                      _isUpdateMode ? "新しい動画URLを貼り付けて更新" : "抽出したURLを手動登録 (解析スキップ)",
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: _isUpdateMode ? Colors.red : Colors.orange,
+                      ),
+                    ),
                     const SizedBox(height: 8),
                     const Text(
                       "拡張機能などで取得した .m3u8 / .mp4 のURLを貼り付けてください。",
@@ -219,8 +326,7 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
                         suffixIcon: IconButton(
                           icon: const Icon(Icons.paste),
                           onPressed: () async {
-                            // クリップボードから貼り付け等はOS機能で可能だが、ボタンとしても用意可
-                            // ここではシンプルに実装省略（TextFieldの標準機能で貼り付け可能）
+                            // 貼り付け処理（省略）
                           },
                           tooltip: "貼り付け",
                         ),
@@ -230,7 +336,7 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
                     ),
                     const SizedBox(height: 12),
 
-                    // プレイリスト選択
+                    // プレイリスト選択（更新モード時は無効化または固定表示）
                     DropdownButtonFormField<String>(
                       value: _selectedPlaylistId,
                       decoration: const InputDecoration(
@@ -244,7 +350,7 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
                           child: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis),
                         );
                       }).toList(),
-                      onChanged: (val) {
+                      onChanged: _isUpdateMode ? null : (val) { // 更新モード時は変更不可
                         setState(() {
                           _selectedPlaylistId = val;
                         });
@@ -254,33 +360,48 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
                     const SizedBox(height: 16),
 
                     // アクションボタン
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            icon: const Icon(Icons.add),
-                            label: const Text("リストに追加"),
-                            onPressed: () => _handleManualAdd(playNow: false),
-                            style: OutlinedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                            ),
+                    if (_isUpdateMode)
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.refresh),
+                          label: const Text("リンクを更新する"),
+                          onPressed: _handleManualUpdate,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.orange,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            icon: const Icon(Icons.play_arrow),
-                            label: const Text("追加して再生"),
-                            onPressed: () => _handleManualAdd(playNow: true),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.red,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 12),
+                      )
+                    else
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              icon: const Icon(Icons.add),
+                              label: const Text("リストに追加"),
+                              onPressed: () => _handleManualAdd(playNow: false),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                              ),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              icon: const Icon(Icons.play_arrow),
+                              label: const Text("追加して再生"),
+                              onPressed: () => _handleManualAdd(playNow: true),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.red,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                   ],
                 ),
               ),
@@ -290,6 +411,39 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
         ),
       ),
     );
+  }
+
+  /// 更新モード用ハンドラ
+  void _handleManualUpdate() {
+    final streamUrl = _manualUrlController.text.trim();
+    if (streamUrl.isEmpty) {
+      ScaffoldMessenger.of(widget.parentContext).showSnackBar(
+        const SnackBar(content: Text("動画URLを入力してください")),
+      );
+      return;
+    }
+
+    if (_existingItem == null || _existingPlaylistId == null) return;
+
+    // 有効期限を解析
+    final expiry = _parseExpiry(streamUrl);
+
+    // マネージャー経由で更新
+    _playlistManager.updateItemLink(
+      playlistId: _existingPlaylistId!,
+      itemId: _existingItem!.id,
+      newStreamUrl: streamUrl,
+      newExpirationDate: expiry,
+    );
+
+    Navigator.pop(context); // モーダルを閉じる
+
+    ScaffoldMessenger.of(widget.parentContext).showSnackBar(
+      SnackBar(content: Text("リンクを更新しました ${expiry != null ? '(期限あり)' : ''}")),
+    );
+
+    // 更新したリストへ遷移
+    widget.onCastFinished(_existingPlaylistId!);
   }
 
   /// 手動追加処理
@@ -302,32 +456,32 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
       return;
     }
 
-    // 保存先ID（未選択なら新規作成するか既存の先頭を使うなどの処理はManager側で吸収済みだが、IDは必須）
     String targetId = _selectedPlaylistId ?? "";
     if (targetId.isEmpty && _playlistManager.currentPlaylists.isNotEmpty) {
       targetId = _playlistManager.currentPlaylists.first.id;
     }
 
-    // 1. リストに追加（バイパス処理）
-    // 【POINT】ここで _pageIconUrl (OGP画像) が渡されることで、サムネイルとして保存されます
+    // 有効期限解析 (新規追加時も有効)
+    final expiry = _parseExpiry(streamUrl); // 追加
+
+    // 1. リストに追加
     _playlistManager.addManualItem(
       targetPlaylistId: targetId,
       title: _pageTitle.isNotEmpty ? _pageTitle : "手動追加アイテム",
-      originalUrl: widget.url, // 共有元のページURL
-      streamUrl: streamUrl,    // 手動入力された動画URL
-      thumbnailUrl: _pageIconUrl, // ページのアイコン(OGP)をサムネとして使用
+      originalUrl: widget.url,
+      streamUrl: streamUrl,
+      thumbnailUrl: _pageIconUrl,
+      expirationDate: expiry, // 有効期限を渡す
     );
 
-    Navigator.pop(context); // モーダルを閉じる
+    Navigator.pop(context);
 
-    // 2. 再生リクエスト（playNowの場合）
     if (playNow) {
       final device = _dlnaService.currentDevice;
       if (device != null) {
         ScaffoldMessenger.of(widget.parentContext).showSnackBar(
           SnackBar(content: Text("${device.name} で再生を開始します")),
         );
-        // Kodiへ送信
         await _dlnaService.playNow(
           device,
           streamUrl,
@@ -345,7 +499,6 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
       );
     }
 
-    // コールバックでライブラリ画面へ遷移させる
     widget.onCastFinished(targetId);
   }
 
@@ -369,7 +522,6 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
       );
       return;
     }
-    // 情報は取得済みなので、ダイアログを即表示
     _showAddSiteDialog(
         initialName: _pageTitle, initialUrl: widget.url, initialIconUrl: _pageIconUrl);
   }

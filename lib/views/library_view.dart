@@ -1,5 +1,6 @@
 // lib/views/library_view.dart
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../managers/playlist_manager.dart';
 import '../services/dlna_service.dart';
 
@@ -7,11 +8,9 @@ class LibraryView extends StatefulWidget {
   const LibraryView({super.key});
 
   @override
-  // 【修正】Stateクラスをパブリックに変更したため戻り値の型も変更
   LibraryViewState createState() => LibraryViewState();
 }
 
-// 【修正】_LibraryViewState から LibraryViewState へ変更 (外部アクセス用)
 class LibraryViewState extends State<LibraryView> {
   final DlnaService _dlnaService = DlnaService();
   final PlaylistManager _manager = PlaylistManager();
@@ -31,7 +30,6 @@ class LibraryViewState extends State<LibraryView> {
 
   // --- ナビゲーション制御 ---
 
-  // 【修正】 _openPlaylist から openPlaylist へ変更 (外部アクセス用)
   void openPlaylist(String playlistId) {
     setState(() {
       _selectedPlaylistId = playlistId;
@@ -52,7 +50,7 @@ class LibraryViewState extends State<LibraryView> {
     }
   }
 
-  // --- 詳細リスト用ロジック (旧PlaylistPageより移植) ---
+  // --- 詳細リスト用ロジック ---
 
   void _scrollToPlayingItem(List<LocalPlaylistItem> items) {
     if (_hasInitialScrolled) return;
@@ -157,7 +155,7 @@ class LibraryViewState extends State<LibraryView> {
     );
   }
 
-  // --- ダイアログ関連 (旧LibraryView/PlaylistPageより移植・統合) ---
+  // --- ダイアログ関連 ---
 
   void _showCreateDialog() {
     final controller = TextEditingController();
@@ -274,6 +272,69 @@ class LibraryViewState extends State<LibraryView> {
   }
 
   void _showDetailDialog(LocalPlaylistItem item, int index, bool isConnected, DlnaDevice? currentDevice) {
+    Widget expiryInfo = const SizedBox.shrink();
+    Widget updateHelpMsg = const SizedBox.shrink(); // 【追加】案内メッセージ用変数
+
+    if (item.expirationDate != null) {
+      final now = DateTime.now();
+      final diff = item.expirationDate!.difference(now);
+      final isExpired = diff.isNegative;
+      final dateStr = "${item.expirationDate!.month}/${item.expirationDate!.day} "
+          "${item.expirationDate!.hour.toString().padLeft(2, '0')}:${item.expirationDate!.minute.toString().padLeft(2, '0')}";
+
+      expiryInfo = Container(
+        margin: const EdgeInsets.only(top: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: isExpired ? Colors.red.withOpacity(0.1) : Colors.blue.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: isExpired ? Colors.red : Colors.blue),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(isExpired ? Icons.warning : Icons.timer,
+                size: 16, color: isExpired ? Colors.red : Colors.blue),
+            const SizedBox(width: 8),
+            Text(
+              isExpired ? "有効期限切れ ($dateStr)" : "有効期限: $dateStr",
+              style: TextStyle(
+                color: isExpired ? Colors.red : Colors.blue,
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+              ),
+            ),
+          ],
+        ),
+      );
+
+      // 【追加】期限切れ時の案内メッセージ作成
+      if (isExpired) {
+        updateHelpMsg = Container(
+          margin: const EdgeInsets.only(top: 8),
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.orange.shade50,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.orange),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: const [
+              Icon(Icons.info_outline, size: 16, color: Colors.orange),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  "リンクの有効期限が切れています。\n下のボタンからブラウザで開き、新しい動画URLをコピーした後、ブラウザの『共有』機能からこのアプリを選んで戻ると、リンクを更新できます。",
+                  style: TextStyle(fontSize: 11, color: Colors.brown),
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -286,41 +347,81 @@ class LibraryViewState extends State<LibraryView> {
               AspectRatio(aspectRatio: 16 / 9, child: Image.network(item.thumbnailUrl!, fit: BoxFit.cover)),
             Padding(
               padding: const EdgeInsets.all(16.0),
-              child: Text(item.title, style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+              child: Column(
+                children: [
+                  Text(item.title, style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+                  expiryInfo,
+                  updateHelpMsg, // 【追加】案内メッセージを表示
+                ],
+              ),
             ),
           ],
         ),
-        actionsAlignment: MainAxisAlignment.spaceBetween,
         actions: [
-          TextButton.icon(
-            icon: const Icon(Icons.drive_file_move_outline),
-            label: const Text("移動"),
-            onPressed: () {
-              Navigator.pop(ctx);
-              _showMoveToDialog(item);
-            },
-          ),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("閉じる")),
-              const SizedBox(width: 8),
+          SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // --- 既存のボタン列 (移動, 閉じる, 再生) ---
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    TextButton.icon(
+                      icon: const Icon(Icons.drive_file_move_outline),
+                      label: const Text("移動"),
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _showMoveToDialog(item);
+                      },
+                    ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("閉じる")),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          icon: const Icon(Icons.play_arrow),
+                          label: const Text("再生"),
+                          style: ElevatedButton.styleFrom(backgroundColor: isConnected ? Colors.red : Colors.grey, foregroundColor: Colors.white),
+                          onPressed: () async {
+                            if (!isConnected || currentDevice == null) {
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('デバイスに接続してください')));
+                              return;
+                            }
+                            final pid = _selectedPlaylistId ?? _manager.currentPlaylists.first.id;
+                            Navigator.pop(ctx);
+                            await _manager.playOrJump(currentDevice, pid, index);
+                          },
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
 
-              ElevatedButton.icon(
-                icon: const Icon(Icons.play_arrow),
-                label: const Text("再生"),
-                style: ElevatedButton.styleFrom(backgroundColor: isConnected ? Colors.red : Colors.grey, foregroundColor: Colors.white),
-                onPressed: () async {
-                  if (!isConnected || currentDevice == null) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('デバイスに接続してください')));
-                    return;
-                  }
-                  final pid = _selectedPlaylistId ?? _manager.currentPlaylists.first.id;
-                  Navigator.pop(ctx);
-                  await _manager.playOrJump(currentDevice, pid, index);
-                },
-              ),
-            ],
+                const SizedBox(height: 12),
+                const Divider(),
+
+                // --- 【追加】ブラウザで開くリンク ---
+                TextButton.icon(
+                  icon: const Icon(Icons.open_in_browser, color: Colors.blue),
+                  label: const Text("この動画をブラウザで開く", style: TextStyle(color: Colors.blue, decoration: TextDecoration.underline)),
+                  onPressed: () async {
+                    try {
+                      final uri = Uri.parse(item.originalUrl);
+                      // 外部ブラウザで開く (LaunchMode.externalApplication)
+                      if (await canLaunchUrl(uri)) {
+                        await launchUrl(uri, mode: LaunchMode.externalApplication);
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ブラウザを開けませんでした')));
+                      }
+                    } catch (e) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('無効なURLです')));
+                    }
+                  },
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -396,7 +497,6 @@ class LibraryViewState extends State<LibraryView> {
                   orElse: () => PlaylistModel(id: 'dummy', name: 'Error', items: [])
               );
 
-              // 該当プレイリストが存在しない場合（削除された場合など）は一覧に戻る
               if (targetList.id == 'dummy') {
                 WidgetsBinding.instance.addPostFrameCallback((_) => _closePlaylist());
                 return const Center(child: CircularProgressIndicator());
@@ -487,7 +587,6 @@ class LibraryViewState extends State<LibraryView> {
                   ),
                 ),
                 subtitle: Text("${playlist.items.length} videos"),
-                // 【修正】_openPlaylist -> openPlaylist
                 onTap: () => openPlaylist(playlist.id),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -726,6 +825,55 @@ class LibraryViewState extends State<LibraryView> {
                               : const Icon(Icons.movie, color: Colors.grey),
                         ),
                       ),
+
+                      // サムネイル上の有効期限バッジ (Step 4で実装済み)
+                      if (item.expirationDate != null)
+                        Builder(
+                          builder: (context) {
+                            final now = DateTime.now();
+                            final diff = item.expirationDate!.difference(now);
+                            final isExpired = diff.isNegative;
+
+                            if (isExpired) {
+                              return Container(
+                                color: Colors.black.withOpacity(0.7),
+                                alignment: Alignment.center,
+                                child: const Text(
+                                  "期限切れ",
+                                  style: TextStyle(color: Colors.redAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                                ),
+                              );
+                            }
+
+                            String text;
+                            Color bgColor;
+                            if (diff.inHours < 1) {
+                              text = "残り${diff.inMinutes}分";
+                              bgColor = Colors.red;
+                            } else if (diff.inHours < 24) {
+                              text = "残り${diff.inHours}時間";
+                              bgColor = Colors.orange;
+                            } else {
+                              text = "${item.expirationDate!.month}/${item.expirationDate!.day}まで";
+                              bgColor = Colors.blueGrey;
+                            }
+
+                            return Positioned(
+                              bottom: 0, left: 0, right: 0,
+                              child: Container(
+                                color: bgColor.withOpacity(0.8),
+                                padding: const EdgeInsets.symmetric(vertical: 1),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  text,
+                                  style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold),
+                                  maxLines: 1,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+
                       if (isPlaying)
                         Container(
                           color: Colors.black54,
@@ -747,10 +895,43 @@ class LibraryViewState extends State<LibraryView> {
                   ),
                 ),
 
+                // 【修正】有効期限テキストの追加
                 subtitle: Row(
                   children: [
                     Text(item.durationStr, style: const TextStyle(fontSize: 12)),
                     const SizedBox(width: 12),
+
+                    // 有効期限テキスト表示
+                    if (item.expirationDate != null) ...[
+                      Builder(
+                          builder: (context) {
+                            final diff = item.expirationDate!.difference(DateTime.now());
+                            final isExpired = diff.isNegative;
+                            String text;
+                            Color color;
+
+                            if (isExpired) {
+                              text = "⚠ 期限切れ";
+                              color = Colors.red;
+                            } else if (diff.inHours < 3) {
+                              text = "残り${diff.inHours}時間${diff.inMinutes % 60}分";
+                              color = Colors.orange;
+                            } else {
+                              text = "${item.expirationDate!.month}/${item.expirationDate!.day} ${item.expirationDate!.hour}:${item.expirationDate!.minute.toString().padLeft(2,'0')}";
+                              color = Colors.grey;
+                            }
+
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 12),
+                              child: Text(
+                                text,
+                                style: TextStyle(color: color, fontSize: 12, fontWeight: isExpired ? FontWeight.bold : FontWeight.normal),
+                              ),
+                            );
+                          }
+                      ),
+                    ],
+
                     if (item.hasError) ...[
                       const Icon(Icons.error, size: 16, color: Colors.red),
                       const SizedBox(width: 4),

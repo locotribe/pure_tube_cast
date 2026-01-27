@@ -2,7 +2,7 @@
   description: "YouTube caster for old devices"
   publish_to: 'none'
 
-  version: 1.17.2+1
+  version: 1.18.0+1
 
   environment:
     sdk: ^3.5.3
