@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:html/parser.dart' as parser;
 import '../managers/site_manager.dart';
-import '../managers/playlist_manager.dart'; // 追加
-import '../services/dlna_service.dart'; // 追加
+import '../managers/playlist_manager.dart';
+import '../services/dlna_service.dart';
 import '../pages/cast_page.dart';
 
 /// HomePageから呼び出すエントリポイント
@@ -78,6 +78,7 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
   }
 
   /// 共有されたURL（Webページ）のタイトル等を取得
+  /// 【修正】サムネイル(OGP)を優先して取得するように変更
   Future<void> _fetchPageInfo() async {
     try {
       final response = await http
@@ -87,14 +88,21 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
         final document = parser.parse(response.body);
         final title = document.querySelector('title')?.text?.trim() ?? "";
 
-        var iconLink = document.querySelector('link[rel="icon"]')?.attributes['href'];
-        iconLink ??= document.querySelector('link[rel="shortcut icon"]')?.attributes['href'];
+        // 1. まずOGP画像 (サムネイル) を探す
+        var iconLink = document.querySelector('meta[property="og:image"]')?.attributes['content'];
+
+        // 2. OGPがない場合は、従来のFaviconを探す (フォールバック)
+        if (iconLink == null || iconLink.isEmpty) {
+          iconLink = document.querySelector('link[rel="icon"]')?.attributes['href'];
+          iconLink ??= document.querySelector('link[rel="shortcut icon"]')?.attributes['href'];
+        }
 
         if (mounted) {
           setState(() {
             if (title.isNotEmpty) _pageTitle = title;
             if (iconLink != null && iconLink.isNotEmpty) {
-              _pageIconUrl = Uri.parse(widget.url).resolve(iconLink).toString();
+              // 相対パス対応 (OGPも相対パスの場合があるためresolveを使用)
+              _pageIconUrl = Uri.parse(widget.url).resolve(iconLink!).toString();
             } else {
               // faviconフォールバック
               _pageIconUrl = Uri.parse(widget.url).resolve('/favicon.ico').toString();
@@ -301,12 +309,13 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
     }
 
     // 1. リストに追加（バイパス処理）
+    // 【POINT】ここで _pageIconUrl (OGP画像) が渡されることで、サムネイルとして保存されます
     _playlistManager.addManualItem(
       targetPlaylistId: targetId,
       title: _pageTitle.isNotEmpty ? _pageTitle : "手動追加アイテム",
       originalUrl: widget.url, // 共有元のページURL
       streamUrl: streamUrl,    // 手動入力された動画URL
-      thumbnailUrl: _pageIconUrl, // ページのアイコンを仮サムネとして使用
+      thumbnailUrl: _pageIconUrl, // ページのアイコン(OGP)をサムネとして使用
     );
 
     Navigator.pop(context); // モーダルを閉じる
