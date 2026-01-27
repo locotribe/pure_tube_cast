@@ -1,9 +1,10 @@
 // lib/views/remote_view.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
+// ignore: unused_import
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/dlna_service.dart';
-import '../managers/playlist_manager.dart'; // 【追加】リスト情報参照用
+import '../managers/playlist_manager.dart';
 
 class RemoteView extends StatefulWidget {
   const RemoteView({super.key});
@@ -14,7 +15,7 @@ class RemoteView extends StatefulWidget {
 
 class _RemoteViewState extends State<RemoteView> {
   final DlnaService _dlnaService = DlnaService();
-  final PlaylistManager _playlistManager = PlaylistManager(); // 【追加】
+  final PlaylistManager _playlistManager = PlaylistManager();
   Timer? _statusPollingTimer;
 
   bool _isConnected = false;
@@ -29,7 +30,6 @@ class _RemoteViewState extends State<RemoteView> {
   double _currentSpeed = 1.0;
   int _currentVolume = 50;
 
-  // シークバー操作中の競合を防ぐフラグ
   bool _isSeeking = false;
 
   @override
@@ -55,7 +55,7 @@ class _RemoteViewState extends State<RemoteView> {
       final status = await _dlnaService.getPlayerPropertiesForRemote(device);
       if (mounted) {
         if (status != null) {
-          // 【追加】リストから再生中のアイテムを探してサムネイルを補完
+          // サムネイル補完
           String thumbUrl = status['thumbnail'] ?? "";
           if (thumbUrl.isEmpty || !thumbUrl.startsWith('http')) {
             final playingItem = _findPlayingItem();
@@ -69,9 +69,8 @@ class _RemoteViewState extends State<RemoteView> {
             _hasMedia = true;
 
             _currentTitle = status['title'] != "" ? status['title'] : "再生中";
-            _currentThumbnail = thumbUrl; // 補完したURLを使用
+            _currentThumbnail = thumbUrl;
 
-            // シーク操作中でなければ時間を更新
             if (!_isSeeking) {
               _currentTime = status['time'];
             }
@@ -79,8 +78,8 @@ class _RemoteViewState extends State<RemoteView> {
 
             double speed = (status['speed'] as num).toDouble();
             _isPlaying = speed != 0;
-
             if (speed == 0) speed = 1.0;
+
             _currentSpeed = speed;
             _currentVolume = (status['volume'] as num).toInt();
           });
@@ -97,7 +96,6 @@ class _RemoteViewState extends State<RemoteView> {
     });
   }
 
-  // 【追加】PlaylistManagerから再生中のアイテムを検索
   LocalPlaylistItem? _findPlayingItem() {
     for (var playlist in _playlistManager.currentPlaylists) {
       for (var item in playlist.items) {
@@ -109,13 +107,22 @@ class _RemoteViewState extends State<RemoteView> {
 
   // --- 操作ロジック ---
 
+  // 【修正】標準的な早送り・巻き戻し機能 (increment / decrement)
+  // Kodiの標準挙動として、押すたびに速度が 2x, 4x, 8x... または -2x, -4x... と変化します
   void _fastForwardRewind(bool isForward) {
     if (!_isConnected || !_hasMedia) return;
     final device = _dlnaService.currentDevice;
     if (device != null) {
-      // 【変更】倍速(increment)ではなく、テンポ操作(tempoup/tempodown)を実行
-      // これにより、0.1x〜0.25x単位などの細かい速度調整を試みます
-      _dlnaService.executeAction(device, isForward ? "tempoup" : "tempodown");
+      // DlnaServiceの changeSpeed メソッドを使用 (Player.SetSpeed "increment"/"decrement")
+      _dlnaService.changeSpeed(device, isForward ? "increment" : "decrement");
+
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(isForward ? "早送り (速度アップ)" : "巻き戻し (速度ダウン)"),
+          duration: const Duration(milliseconds: 300),
+        ),
+      );
     }
   }
 
@@ -125,24 +132,30 @@ class _RemoteViewState extends State<RemoteView> {
     if (device != null) {
       _dlnaService.resetSpeed(device);
       setState(() => _currentSpeed = 1.0);
+
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("標準速度 (1.0x)"),
+          duration: Duration(milliseconds: 500),
+        ),
+      );
     }
   }
 
-  // シークバー操作開始
+  // シークバー操作
   void _onSeekStart(double value) {
     setState(() {
       _isSeeking = true;
     });
   }
 
-  // シークバー操作中 (UI表示のみ更新)
   void _onSeekUpdate(double value) {
     setState(() {
       _currentTime = value.toInt();
     });
   }
 
-  // シークバー操作終了
   void _onSeekEnd(double value) {
     setState(() {
       _isSeeking = false;
@@ -154,13 +167,12 @@ class _RemoteViewState extends State<RemoteView> {
     }
   }
 
-  // 【追加】相対シーク (10秒送り/戻し用)
+  // 相対シーク
   void _seekRelative(int seconds) {
     if (!_isConnected || !_hasMedia) return;
     final device = _dlnaService.currentDevice;
     if (device != null) {
       _dlnaService.seekRelative(device, seconds);
-      // UIも一時的に更新して反応を良く見せる
       setState(() {
         _currentTime = (_currentTime + seconds).clamp(0, _totalTime);
       });
@@ -185,13 +197,11 @@ class _RemoteViewState extends State<RemoteView> {
 
   String _getKodiImageUrl(String kodiPath) {
     if (kodiPath.isEmpty) return "";
-    // httpから始まる場合はそのまま（PlaylistManager由来など）
     if (kodiPath.startsWith("http") && !kodiPath.startsWith("image://")) return kodiPath;
 
     final device = _dlnaService.currentDevice;
     if (device == null) return "";
 
-    // Kodiの画像プロキシ
     return "http://${device.ip}:${device.port}/image/${Uri.encodeComponent(kodiPath)}";
   }
 
@@ -269,18 +279,17 @@ class _RemoteViewState extends State<RemoteView> {
                               overflow: TextOverflow.ellipsis,
                             ),
                             const SizedBox(height: 8),
-                            if (_currentSpeed != 1.0)
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: Colors.red,
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Text(
-                                  "Speed: ${_currentSpeed}x",
-                                  style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
-                                ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: _currentSpeed != 1.0 ? Colors.red : Colors.grey.withOpacity(0.5),
+                                borderRadius: BorderRadius.circular(12),
                               ),
+                              child: Text(
+                                "Speed: ${_currentSpeed.toStringAsFixed(1)}x",
+                                style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -292,10 +301,9 @@ class _RemoteViewState extends State<RemoteView> {
 
             const SizedBox(height: 10),
 
-            // 2. シークバーとタップ可能な時間表示
+            // 2. シークバー
             Row(
               children: [
-                // 左：現在時間（タップで-10秒）
                 InkWell(
                   onTap: () => _seekRelative(-10),
                   borderRadius: BorderRadius.circular(8),
@@ -304,7 +312,6 @@ class _RemoteViewState extends State<RemoteView> {
                     child: Stack(
                       alignment: Alignment.center,
                       children: [
-                        // 裏側に薄くアイコンを表示
                         Icon(Icons.replay_10, color: Colors.grey.withOpacity(0.2), size: 32),
                         Text(formatTime(_currentTime), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
                       ],
@@ -325,7 +332,6 @@ class _RemoteViewState extends State<RemoteView> {
                   ),
                 ),
 
-                // 右：合計時間（タップで+10秒）
                 InkWell(
                   onTap: () => _seekRelative(10),
                   borderRadius: BorderRadius.circular(8),
@@ -334,7 +340,6 @@ class _RemoteViewState extends State<RemoteView> {
                     child: Stack(
                       alignment: Alignment.center,
                       children: [
-                        // 裏側に薄くアイコンを表示
                         Icon(Icons.forward_10, color: Colors.grey.withOpacity(0.2), size: 32),
                         Text(formatTime(_totalTime), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
                       ],
@@ -374,49 +379,55 @@ class _RemoteViewState extends State<RemoteView> {
             const SizedBox(height: 20),
             const Divider(),
 
-            // 4. 速度コントロール
+            // 4. 速度コントロール (単純な早送り・巻き戻しに戻す)
             const Padding(
               padding: EdgeInsets.only(bottom: 8.0),
-              child: Text("再生速度コントロール", style: TextStyle(color: Colors.grey, fontSize: 12)),
+              child: Text("速度コントロール", style: TextStyle(color: Colors.grey, fontSize: 12)),
             ),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
+                // 巻き戻し
                 Column(
                   children: [
                     IconButton(
-                      icon: const Icon(Icons.fast_rewind),
-                      iconSize: 32,
+                      icon: const Icon(Icons.fast_rewind), // アイコンを戻す
+                      iconSize: 36,
                       color: iconColor,
                       onPressed: _hasMedia ? () => _fastForwardRewind(false) : null,
                     ),
-                    Text("巻き戻し", style: TextStyle(fontSize: 10, color: iconColor)),
+                    Text("巻き戻し", style: TextStyle(fontSize: 12, color: iconColor, fontWeight: FontWeight.bold)),
                   ],
                 ),
+
+                // 標準に戻す
                 ElevatedButton.icon(
                   onPressed: _hasMedia ? _resetSpeed : null,
-                  icon: const Icon(Icons.speed, size: 18),
+                  icon: const Icon(Icons.speed, size: 20),
                   label: const Text(
-                    "標準に戻す",
+                    "標準 (1.0x)",
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
                   ),
                   style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
                     backgroundColor: Colors.white,
                     foregroundColor: Colors.black87,
                     elevation: 2,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                   ),
                 ),
+
+                // 早送り
                 Column(
                   children: [
                     IconButton(
-                      icon: const Icon(Icons.fast_forward),
-                      iconSize: 32,
+                      icon: const Icon(Icons.fast_forward), // アイコンを戻す
+                      iconSize: 36,
                       color: iconColor,
                       onPressed: _hasMedia ? () => _fastForwardRewind(true) : null,
                     ),
-                    Text("早送り", style: TextStyle(fontSize: 10, color: iconColor)),
+                    Text("早送り", style: TextStyle(fontSize: 12, color: iconColor, fontWeight: FontWeight.bold)),
                   ],
                 ),
               ],
