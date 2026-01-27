@@ -9,15 +9,15 @@ android {
     compileSdk = flutter.compileSdkVersion
     ndkVersion = "27.0.12077973"
 
+    // Java 17 を app モジュールだけに適用
     compileOptions {
-        // 【修正】Java 11 に設定
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // Kotlin 17
     kotlinOptions {
-        // 【修正】Kotlinも 11 に設定
-        jvmTarget = "11"
+        jvmTarget = "17"
     }
 
     defaultConfig {
@@ -33,6 +33,11 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+}
+
+// Kotlin の JVM Toolchain（Android 推奨）
+kotlin {
+    jvmToolchain(17)
 }
 
 flutter {
