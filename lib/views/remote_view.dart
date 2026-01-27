@@ -1,7 +1,9 @@
+// lib/views/remote_view.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/dlna_service.dart';
+import '../managers/playlist_manager.dart'; // 【追加】リスト情報参照用
 
 class RemoteView extends StatefulWidget {
   const RemoteView({super.key});
@@ -12,10 +14,12 @@ class RemoteView extends StatefulWidget {
 
 class _RemoteViewState extends State<RemoteView> {
   final DlnaService _dlnaService = DlnaService();
+  final PlaylistManager _playlistManager = PlaylistManager(); // 【追加】
   Timer? _statusPollingTimer;
 
   bool _isConnected = false;
   String _currentTitle = "未接続 / 再生なし";
+  String _currentThumbnail = "";
 
   bool _isPlaying = false;
   bool _hasMedia = false;
@@ -25,38 +29,19 @@ class _RemoteViewState extends State<RemoteView> {
   double _currentSpeed = 1.0;
   int _currentVolume = 50;
 
-  int _skipInterval = 10;
-
-  Timer? _skipDebounceTimer;
-  int _accumulatedSkipSeconds = 0;
-  bool _isSkipping = false;
+  // シークバー操作中の競合を防ぐフラグ
+  bool _isSeeking = false;
 
   @override
   void initState() {
     super.initState();
-    _loadSettings();
     _startPolling();
   }
 
   @override
   void dispose() {
     _statusPollingTimer?.cancel();
-    _skipDebounceTimer?.cancel();
     super.dispose();
-  }
-
-  Future<void> _loadSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (mounted) {
-      setState(() {
-        _skipInterval = prefs.getInt('remote_skip_interval') ?? 10;
-      });
-    }
-  }
-
-  Future<void> _saveSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('remote_skip_interval', _skipInterval);
   }
 
   void _startPolling() {
@@ -70,18 +55,31 @@ class _RemoteViewState extends State<RemoteView> {
       final status = await _dlnaService.getPlayerPropertiesForRemote(device);
       if (mounted) {
         if (status != null) {
+          // 【追加】リストから再生中のアイテムを探してサムネイルを補完
+          String thumbUrl = status['thumbnail'] ?? "";
+          if (thumbUrl.isEmpty || !thumbUrl.startsWith('http')) {
+            final playingItem = _findPlayingItem();
+            if (playingItem != null && playingItem.thumbnailUrl != null) {
+              thumbUrl = playingItem.thumbnailUrl!;
+            }
+          }
+
           setState(() {
             _isConnected = true;
             _hasMedia = true;
 
             _currentTitle = status['title'] != "" ? status['title'] : "再生中";
-            _currentTime = status['time'];
+            _currentThumbnail = thumbUrl; // 補完したURLを使用
+
+            // シーク操作中でなければ時間を更新
+            if (!_isSeeking) {
+              _currentTime = status['time'];
+            }
             _totalTime = status['totaltime'] > 0 ? status['totaltime'] : 1;
 
             double speed = (status['speed'] as num).toDouble();
             _isPlaying = speed != 0;
 
-            // 停止中は速度0が返るが、表示上は1.0にしておく
             if (speed == 0) speed = 1.0;
             _currentSpeed = speed;
             _currentVolume = (status['volume'] as num).toInt();
@@ -91,6 +89,7 @@ class _RemoteViewState extends State<RemoteView> {
             _isConnected = true;
             _hasMedia = false;
             _currentTitle = "再生停止中";
+            _currentThumbnail = "";
             _isPlaying = false;
           });
         }
@@ -98,101 +97,102 @@ class _RemoteViewState extends State<RemoteView> {
     });
   }
 
-  // --- 操作ロジック ---
-
-  void _handleSkip(bool isForward) {
-    if (!_isConnected || !_hasMedia) return;
-
-    _skipDebounceTimer?.cancel();
-
-    setState(() {
-      _isSkipping = true;
-      if (isForward) {
-        _accumulatedSkipSeconds += _skipInterval;
-      } else {
-        _accumulatedSkipSeconds -= _skipInterval;
+  // 【追加】PlaylistManagerから再生中のアイテムを検索
+  LocalPlaylistItem? _findPlayingItem() {
+    for (var playlist in _playlistManager.currentPlaylists) {
+      for (var item in playlist.items) {
+        if (item.isPlaying) return item;
       }
-    });
-
-    _skipDebounceTimer = Timer(const Duration(milliseconds: 800), () {
-      if (_accumulatedSkipSeconds != 0) {
-        final device = _dlnaService.currentDevice;
-        if (device != null) {
-          _dlnaService.seekRelative(device, _accumulatedSkipSeconds);
-        }
-      }
-      if (mounted) {
-        setState(() {
-          _accumulatedSkipSeconds = 0;
-          _isSkipping = false;
-        });
-      }
-    });
+    }
+    return null;
   }
 
-  // 早送り・巻き戻し (Increment/Decrement)
+  // --- 操作ロジック ---
+
   void _fastForwardRewind(bool isForward) {
     if (!_isConnected || !_hasMedia) return;
     final device = _dlnaService.currentDevice;
     if (device != null) {
-      _dlnaService.changeSpeed(device, isForward ? "increment" : "decrement");
+      // 【変更】倍速(increment)ではなく、テンポ操作(tempoup/tempodown)を実行
+      // これにより、0.1x〜0.25x単位などの細かい速度調整を試みます
+      _dlnaService.executeAction(device, isForward ? "tempoup" : "tempodown");
     }
   }
 
-  // 速度リセット (1.0x)
   void _resetSpeed() {
     if (!_isConnected || !_hasMedia) return;
     final device = _dlnaService.currentDevice;
     if (device != null) {
       _dlnaService.resetSpeed(device);
-      // 即座にUIを1.0に戻して反応を良く見せる
       setState(() => _currentSpeed = 1.0);
     }
   }
 
-  // 速度微調整 (TempoUp/Down)
-  void _modifyTempo(bool isIncrement) {
-    if (!_isConnected || !_hasMedia) return;
+  // シークバー操作開始
+  void _onSeekStart(double value) {
+    setState(() {
+      _isSeeking = true;
+    });
+  }
+
+  // シークバー操作中 (UI表示のみ更新)
+  void _onSeekUpdate(double value) {
+    setState(() {
+      _currentTime = value.toInt();
+    });
+  }
+
+  // シークバー操作終了
+  void _onSeekEnd(double value) {
+    setState(() {
+      _isSeeking = false;
+    });
     final device = _dlnaService.currentDevice;
-    if (device != null) {
-      _dlnaService.changeTempo(device, isIncrement ? "increment" : "decrement");
+    if (device != null && _totalTime > 0) {
+      double percentage = (value / _totalTime) * 100.0;
+      _dlnaService.seekTo(device, percentage);
     }
   }
 
-  void _showSettingsDialog() {
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setStateBd) {
-          return AlertDialog(
-            title: const Text("リモコン設定"),
-            content: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text("スキップ秒数"),
-                DropdownButton<int>(
-                  value: _skipInterval,
-                  items: const [3, 5, 10, 15, 30].map((e) => DropdownMenuItem(value: e, child: Text("$e秒"))).toList(),
-                  onChanged: (val) {
-                    if (val != null) setStateBd(() => _skipInterval = val);
-                  },
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  setState(() {});
-                  _saveSettings();
-                  Navigator.pop(ctx);
-                },
-                child: const Text("保存"),
-              ),
-            ],
-          );
-        },
-      ),
-    );
+  // 【追加】相対シーク (10秒送り/戻し用)
+  void _seekRelative(int seconds) {
+    if (!_isConnected || !_hasMedia) return;
+    final device = _dlnaService.currentDevice;
+    if (device != null) {
+      _dlnaService.seekRelative(device, seconds);
+      // UIも一時的に更新して反応を良く見せる
+      setState(() {
+        _currentTime = (_currentTime + seconds).clamp(0, _totalTime);
+      });
+    }
+  }
+
+  void _skipPrevious() {
+    if (!_isConnected || !_hasMedia) return;
+    _dlnaService.skipPrevious(_dlnaService.currentDevice!);
+  }
+
+  void _skipNext() {
+    if (!_isConnected || !_hasMedia) return;
+    _dlnaService.skipNext(_dlnaService.currentDevice!);
+  }
+
+  void _togglePlayPause() {
+    if (!_isConnected || !_hasMedia) return;
+    _dlnaService.togglePlayPause(_dlnaService.currentDevice!);
+    setState(() => _isPlaying = !_isPlaying);
+  }
+
+  String _getKodiImageUrl(String kodiPath) {
+    if (kodiPath.isEmpty) return "";
+    // httpから始まる場合はそのまま（PlaylistManager由来など）
+    if (kodiPath.startsWith("http") && !kodiPath.startsWith("image://")) return kodiPath;
+
+    final device = _dlnaService.currentDevice;
+    if (device == null) return "";
+
+    // Kodiの画像プロキシ
+    return "http://${device.ip}:${device.port}/image/${Uri.encodeComponent(kodiPath)}";
   }
 
   // --- UI構築 ---
@@ -212,12 +212,7 @@ class _RemoteViewState extends State<RemoteView> {
     return Scaffold(
       appBar: AppBar(
         title: const Text("リモコン"),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: _showSettingsDialog,
-          ),
-        ],
+        actions: [],
       ),
       body: device == null
           ? const Center(child: Text("デバイスに接続されていません"))
@@ -225,95 +220,133 @@ class _RemoteViewState extends State<RemoteView> {
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            // ------------------------------------------
-            // 1. テレビ画面風タッチパッド (シーク)
-            // ------------------------------------------
-            Opacity(
-              opacity: _hasMedia ? 1.0 : 0.5,
-              child: AspectRatio(
-                aspectRatio: 16 / 9,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.black87,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey.shade800, width: 2),
-                    boxShadow: [
-                      BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 10, offset: const Offset(0, 4)),
-                    ],
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      // 情報表示エリア
-                      Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (_isSkipping) ...[
-                                Text(
-                                  _accumulatedSkipSeconds > 0 ? "+${_accumulatedSkipSeconds}s" : "${_accumulatedSkipSeconds}s",
-                                  style: const TextStyle(color: Colors.white, fontSize: 48, fontWeight: FontWeight.bold),
+            // 1. サムネイル表示エリア
+            AspectRatio(
+              aspectRatio: 16 / 9,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.black87,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.grey.shade800, width: 2),
+                  boxShadow: [
+                    BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 10, offset: const Offset(0, 4)),
+                  ],
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (_currentThumbnail.isNotEmpty)
+                      Image.network(
+                        _getKodiImageUrl(_currentThumbnail),
+                        fit: BoxFit.cover,
+                        errorBuilder: (c, e, s) => const Center(child: Icon(Icons.broken_image, color: Colors.grey)),
+                      ),
+
+                    Container(color: Colors.black.withOpacity(0.4)),
+
+                    Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _hasMedia ? "再生中" : "停止中",
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.7),
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 1.2,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              _currentTitle,
+                              style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                              textAlign: TextAlign.center,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 8),
+                            if (_currentSpeed != 1.0)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.red,
+                                  borderRadius: BorderRadius.circular(4),
                                 ),
-                                const Text("Seeking...", style: TextStyle(color: Colors.grey)),
-                              ] else ...[
-                                Text(
-                                  _currentTitle,
-                                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                                  textAlign: TextAlign.center,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
+                                child: Text(
+                                  "Speed: ${_currentSpeed}x",
+                                  style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
                                 ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  "${formatTime(_currentTime)} / ${formatTime(_totalTime)}",
-                                  style: const TextStyle(color: Colors.grey, fontSize: 14),
-                                ),
-                              ],
-                            ],
-                          ),
+                              ),
+                          ],
                         ),
                       ),
-                      // タップ領域 (左:戻る / 右:進む)
-                      Row(
-                        children: [
-                          Expanded(
-                            child: InkWell(
-                              onTap: _hasMedia ? () => _handleSkip(false) : null,
-                              splashColor: Colors.white24,
-                              child: Container(
-                                alignment: Alignment.centerLeft,
-                                padding: const EdgeInsets.only(left: 20),
-                                child: const Icon(Icons.replay_10, color: Colors.white24, size: 40),
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            child: InkWell(
-                              onTap: _hasMedia ? () => _handleSkip(true) : null,
-                              splashColor: Colors.white24,
-                              child: Container(
-                                alignment: Alignment.centerRight,
-                                padding: const EdgeInsets.only(right: 20),
-                                child: const Icon(Icons.forward_10, color: Colors.white24, size: 40),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ),
 
-            const SizedBox(height: 20),
+            const SizedBox(height: 10),
 
-            // ------------------------------------------
-            // 2. 再生コントロール (前・再生・次)
-            // ------------------------------------------
+            // 2. シークバーとタップ可能な時間表示
+            Row(
+              children: [
+                // 左：現在時間（タップで-10秒）
+                InkWell(
+                  onTap: () => _seekRelative(-10),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        // 裏側に薄くアイコンを表示
+                        Icon(Icons.replay_10, color: Colors.grey.withOpacity(0.2), size: 32),
+                        Text(formatTime(_currentTime), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                ),
+
+                Expanded(
+                  child: Slider(
+                    value: _currentTime.toDouble().clamp(0, _totalTime.toDouble()),
+                    min: 0,
+                    max: _totalTime.toDouble(),
+                    activeColor: controlColor,
+                    inactiveColor: Colors.grey.shade300,
+                    onChanged: _hasMedia ? _onSeekUpdate : null,
+                    onChangeStart: _hasMedia ? _onSeekStart : null,
+                    onChangeEnd: _hasMedia ? _onSeekEnd : null,
+                  ),
+                ),
+
+                // 右：合計時間（タップで+10秒）
+                InkWell(
+                  onTap: () => _seekRelative(10),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        // 裏側に薄くアイコンを表示
+                        Icon(Icons.forward_10, color: Colors.grey.withOpacity(0.2), size: 32),
+                        Text(formatTime(_totalTime), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 10),
+
+            // 3. 再生コントロール
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
@@ -321,13 +354,10 @@ class _RemoteViewState extends State<RemoteView> {
                   icon: const Icon(Icons.skip_previous),
                   iconSize: 42,
                   color: iconColor,
-                  onPressed: _hasMedia ? () => _dlnaService.skipPrevious(device) : null,
+                  onPressed: _hasMedia ? _skipPrevious : null,
                 ),
                 FloatingActionButton(
-                  onPressed: _hasMedia ? () {
-                    _dlnaService.togglePlayPause(device);
-                    setState(() => _isPlaying = !_isPlaying);
-                  } : null,
+                  onPressed: _hasMedia ? _togglePlayPause : null,
                   backgroundColor: _hasMedia ? Colors.red : Colors.grey,
                   elevation: 4,
                   child: Icon(_isPlaying ? Icons.pause : Icons.play_arrow, size: 42, color: Colors.white),
@@ -336,7 +366,7 @@ class _RemoteViewState extends State<RemoteView> {
                   icon: const Icon(Icons.skip_next),
                   iconSize: 42,
                   color: iconColor,
-                  onPressed: _hasMedia ? () => _dlnaService.skipNext(device) : null,
+                  onPressed: _hasMedia ? _skipNext : null,
                 ),
               ],
             ),
@@ -344,9 +374,7 @@ class _RemoteViewState extends State<RemoteView> {
             const SizedBox(height: 20),
             const Divider(),
 
-            // ------------------------------------------
-            // 3. 速度コントロール (メイン)
-            // ------------------------------------------
+            // 4. 速度コントロール
             const Padding(
               padding: EdgeInsets.only(bottom: 8.0),
               child: Text("再生速度コントロール", style: TextStyle(color: Colors.grey, fontSize: 12)),
@@ -354,7 +382,6 @@ class _RemoteViewState extends State<RemoteView> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                // [巻き戻し]
                 Column(
                   children: [
                     IconButton(
@@ -366,13 +393,11 @@ class _RemoteViewState extends State<RemoteView> {
                     Text("巻き戻し", style: TextStyle(fontSize: 10, color: iconColor)),
                   ],
                 ),
-
-                // [リセットボタン (1.0x)]
                 ElevatedButton.icon(
                   onPressed: _hasMedia ? _resetSpeed : null,
                   icon: const Icon(Icons.speed, size: 18),
-                  label: Text(
-                    "1.0x\n標準に戻す",
+                  label: const Text(
+                    "標準に戻す",
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
                   ),
@@ -383,8 +408,6 @@ class _RemoteViewState extends State<RemoteView> {
                     elevation: 2,
                   ),
                 ),
-
-                // [早送り]
                 Column(
                   children: [
                     IconButton(
@@ -400,64 +423,9 @@ class _RemoteViewState extends State<RemoteView> {
             ),
 
             const SizedBox(height: 20),
-
-            // ------------------------------------------
-            // 4. 速度微調整 / スロー (実験的機能)
-            // ------------------------------------------
-            Container(
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Column(
-                children: [
-                  Text("微調整・スロー (現在の速度: ${_currentSpeed}x)",
-                      style: const TextStyle(color: Colors.black54, fontSize: 12, fontWeight: FontWeight.bold)
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      IconButton(
-                        onPressed: _hasMedia ? () => _modifyTempo(false) : null,
-                        icon: const Icon(Icons.remove),
-                        color: iconColor,
-                        tooltip: "速度ダウン",
-                      ),
-
-                      // 現在の速度表示 (ただの表示)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey.shade300),
-                          borderRadius: BorderRadius.circular(4),
-                          color: Colors.white,
-                        ),
-                        child: Text(
-                          "${_currentSpeed}x",
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                        ),
-                      ),
-
-                      IconButton(
-                        onPressed: _hasMedia ? () => _modifyTempo(true) : null,
-                        icon: const Icon(Icons.add),
-                        color: iconColor,
-                        tooltip: "速度アップ",
-                      ),
-                    ],
-                  ),
-                  const Text("※環境により動作しない場合があります", style: TextStyle(fontSize: 10, color: Colors.grey)),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 20),
             const Divider(),
 
-            // ------------------------------------------
             // 5. 音量スライダー
-            // ------------------------------------------
             Row(
               children: [
                 Icon(Icons.volume_up, color: iconColor),

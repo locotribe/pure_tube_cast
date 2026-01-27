@@ -480,7 +480,7 @@ class DlnaService {
       // 3. 現在のアイテム情報
       final itemProps = await _sendJsonRpc(device, "Player.GetItem", {
         "playerid": 1,
-        "properties": ["title"]
+        "properties": ["title", "thumbnail"]
       });
 
       if (playerProps == null || appProps == null) return null;
@@ -499,6 +499,7 @@ class DlnaService {
       }
 
       String title = "";
+      String thumbnail = "";
       if (itemProps != null && itemProps['item'] != null) {
         title = itemProps['item']['title'] ?? itemProps['item']['label'] ?? "";
       }
@@ -510,6 +511,7 @@ class DlnaService {
         'volume': appProps['volume'] ?? 0,
         'muted': appProps['muted'] ?? false,
         'title': title,
+        'thumbnail': thumbnail,
       };
     } catch (e) {
       return null;
@@ -617,6 +619,41 @@ class DlnaService {
 
     } catch (e) {
       print("[DlnaService] Seek error: $e");
+    }
+  }
+
+  /// 数値を指定して速度を変更 (0.25x 刻み対応用)
+  Future<void> setSpeed(DlnaDevice device, double speed) async {
+    try {
+      await _sendJsonRpc(device, "Player.SetSpeed", {
+        "playerid": 1,
+        "speed": speed
+      });
+    } catch (e) {
+      print("[DlnaService] setSpeed failed: $e");
+    }
+  }
+
+  /// Kodiのネイティブアクションを実行 (stepforward, stepback等)
+  Future<void> executeAction(DlnaDevice device, String action) async {
+    try {
+      await _sendJsonRpc(device, "Input.ExecuteAction", {"action": action});
+    } catch (e) {
+      print("[DlnaService] executeAction failed: $e");
+    }
+  }
+
+  /// パーセンテージで指定位置へシーク (0.0 - 100.0)
+  Future<void> seekTo(DlnaDevice device, double percentage) async {
+    try {
+      await _sendJsonRpc(device, "Player.Seek", {
+        "playerid": 1,
+        "value": {
+          "percentage": percentage
+        }
+      });
+    } catch (e) {
+      print("[DlnaService] seekTo failed: $e");
     }
   }
 }
