@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../managers/playlist_manager.dart';
 import '../services/dlna_service.dart';
 import '../services/video_resolver.dart';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart'; // 【追加】VideoId抽出用
 
 class CastPage extends StatefulWidget {
   final String? initialUrl;
@@ -206,20 +207,34 @@ class _CastPageState extends State<CastPage> {
       final streamUrl = await _resolver.resolveStreamUrl(_videoMetadata!);
 
       if (streamUrl != null) {
+        // 【追加】YouTube IDの抽出
+        String? ytId;
+        final String originalUrl = _videoMetadata!['url'];
+        // 簡易判定
+        if (originalUrl.contains('youtube.com') || originalUrl.contains('youtu.be')) {
+          try {
+            ytId = VideoId(originalUrl).value;
+          } catch (_) {}
+        }
+
         // Kodiのリストに追加
+        // 【修正】youtubeVideoIdを渡す
         await _dlnaService.addToPlaylist(
             currentDevice,
             streamUrl,
             _videoMetadata!['title'],
-            _videoMetadata!['thumbnailUrl']
+            _videoMetadata!['thumbnailUrl'],
+            youtubeVideoId: ytId // 追加
         );
 
         // Kodiに対して即時再生を要求
+        // 【修正】youtubeVideoIdを渡す
         await _dlnaService.playNow(
             currentDevice,
             streamUrl,
             _videoMetadata!['title'],
-            _videoMetadata!['thumbnailUrl']
+            _videoMetadata!['thumbnailUrl'],
+            youtubeVideoId: ytId // 追加
         );
       }
 

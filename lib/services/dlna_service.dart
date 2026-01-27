@@ -383,18 +383,39 @@ class DlnaService {
     } catch (e) { print("[WOL] Error: $e"); }
   }
 
-  // Kodi操作系 (変更なし)
-  Future<void> playNow(DlnaDevice device, String videoUrl, String title, String? thumbnailUrl) async {
+// Kodi操作系
+  // 【修正】youtubeVideoId引数を追加。指定がある場合はKodiのYouTubeアドオン用URLを使用する
+  Future<void> playNow(DlnaDevice device, String videoUrl, String title, String? thumbnailUrl, {String? youtubeVideoId}) async {
+    // YouTube IDがある場合はプラグインURLを生成、なければ通常のvideoUrlを使用
+    final String kodiUrl = youtubeVideoId != null
+        ? "plugin://plugin.video.youtube/play/?video_id=$youtubeVideoId"
+        : videoUrl;
+
     try {
       await _sendJsonRpc(device, "Playlist.Clear", {"playlistid": 1});
-      await _sendJsonRpc(device, "Playlist.Add", {"playlistid": 1, "item": {"file": videoUrl}});
+      await _sendJsonRpc(device, "Playlist.Add", {"playlistid": 1, "item": {"file": kodiUrl}});
       await _sendJsonRpc(device, "Player.Open", {"item": {"playlistid": 1, "position": 0}, "options": {"resume": false}});
     } catch (e) {
+      // 失敗時（またはDLNAデバイスの場合）は元のvideoUrl（ストリームURL）を使ってフォールバック
       await castVideoDlna(device, videoUrl, title);
     }
   }
-  Future<void> addToPlaylist(DlnaDevice device, String videoUrl, String title, String? thumbnailUrl) async => await _sendJsonRpc(device, "Playlist.Add", {"playlistid": 1, "item": {"file": videoUrl}});
-  Future<void> insertToPlaylist(DlnaDevice device, int position, String videoUrl, String title, String? thumbnailUrl) async => await _sendJsonRpc(device, "Playlist.Insert", {"playlistid": 1, "position": position, "item": {"file": videoUrl}});
+
+  // 【修正】addToPlaylistにも youtubeVideoId 対応
+  Future<void> addToPlaylist(DlnaDevice device, String videoUrl, String title, String? thumbnailUrl, {String? youtubeVideoId}) async {
+    final String kodiUrl = youtubeVideoId != null
+        ? "plugin://plugin.video.youtube/play/?video_id=$youtubeVideoId"
+        : videoUrl;
+    await _sendJsonRpc(device, "Playlist.Add", {"playlistid": 1, "item": {"file": kodiUrl}});
+  }
+
+  // 【修正】insertToPlaylistにも youtubeVideoId 対応
+  Future<void> insertToPlaylist(DlnaDevice device, int position, String videoUrl, String title, String? thumbnailUrl, {String? youtubeVideoId}) async {
+    final String kodiUrl = youtubeVideoId != null
+        ? "plugin://plugin.video.youtube/play/?video_id=$youtubeVideoId"
+        : videoUrl;
+    await _sendJsonRpc(device, "Playlist.Insert", {"playlistid": 1, "position": position, "item": {"file": kodiUrl}});
+  }
   Future<void> playFromPlaylist(DlnaDevice device, int index) async => await _sendJsonRpc(device, "Player.Open", {"item": {"playlistid": 1, "position": index}});
   Future<void> movePlaylistItem(DlnaDevice device, int fromIndex, int toIndex) async => await _sendJsonRpc(device, "Playlist.Move", {"playlistid": 1, "item": fromIndex, "to": toIndex});
   Future<void> removeFromPlaylist(DlnaDevice device, int index) async => await _sendJsonRpc(device, "Playlist.Remove", {"playlistid": 1, "position": index});

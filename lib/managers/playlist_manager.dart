@@ -8,6 +8,7 @@ import '../models/local_playlist_item.dart';
 
 export '../models/playlist_model.dart';
 export '../models/local_playlist_item.dart';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart'; // 【追加】VideoId使用のため
 
 class PlaylistManager {
   static final PlaylistManager _instance = PlaylistManager._internal();
@@ -81,7 +82,17 @@ class PlaylistManager {
     }
     _notifyListeners();
   }
-
+// 【追加】YouTube ID抽出ヘルパー
+  String? _extractYoutubeId(String url) {
+    try {
+      final uri = Uri.tryParse(url);
+      if (uri == null) return null;
+      if (uri.host.contains('youtube.com') || uri.host.contains('youtu.be')) {
+        return VideoId(url).value;
+      }
+    } catch (_) {}
+    return null;
+  }
 
   // ==========================================================
   //  リカバリー（逆同期）ロジック 【時間照合版】
@@ -122,7 +133,7 @@ class PlaylistManager {
       }
     }
 
-    // --- 判定ロジック: タイトル OR URL OR 【時間】 で照合 ---
+// --- 判定ロジック: タイトル OR URL OR 【時間】 で照合 ---
     bool isMatch(LocalPlaylistItem local, KodiPlaylistItem remote, {bool checkDuration = false}) {
       // 1. タイトルチェック
       final lTitle = local.title.trim().toLowerCase();
@@ -131,9 +142,17 @@ class PlaylistManager {
         return true;
       }
 
-      // 2. URL一致 (一応残す)
+      // 2. URL一致 (YouTubeプラグインURL対応)
       if (local.streamUrl != null && local.streamUrl == remote.file) {
         return true;
+      }
+      // 【追加】Kodi側が plugin://... の場合のID照合
+      if (remote.file.startsWith("plugin://plugin.video.youtube")) {
+        final ytId = _extractYoutubeId(local.originalUrl);
+        if (ytId != null && remote.file.contains(ytId)) {
+          print("[Manager] YouTube ID Match: $ytId");
+          return true;
+        }
       }
 
       // 3. 【最強】再生時間の一致チェック (現在再生中のアイテムのみ有効)
@@ -326,16 +345,34 @@ class PlaylistManager {
 
           String? url = await ensureStreamUrl(playlistId, item.id);
           if (url != null) {
+            // 【修正】YouTube IDを取得
+            final ytId = _extractYoutubeId(item.originalUrl);
+
             try {
               // 挿入試行 (Insert)
-              await DlnaService().insertToPlaylist(device, insertPos, url, item.title, item.thumbnailUrl);
+              // 【修正】youtubeVideoIdを渡す
+              await DlnaService().insertToPlaylist(
+                  device,
+                  insertPos,
+                  url,
+                  item.title,
+                  item.thumbnailUrl,
+                  youtubeVideoId: ytId // 追加
+              );
               _markAsQueued(playlistId, item.id);
               await Future.delayed(const Duration(seconds: 2));
             } catch (e) {
               print("[Manager] Insert failed, trying Add fallback: $e");
               // フォールバック (Add)
               try {
-                await DlnaService().addToPlaylist(device, url, item.title, item.thumbnailUrl);
+                // 【修正】youtubeVideoIdを渡す
+                await DlnaService().addToPlaylist(
+                    device,
+                    url,
+                    item.title,
+                    item.thumbnailUrl,
+                    youtubeVideoId: ytId // 追加
+                );
                 _markAsQueued(playlistId, item.id);
                 print("[Manager] Fallback Add succeeded for: ${item.title}");
                 await Future.delayed(const Duration(seconds: 2));
@@ -470,7 +507,17 @@ class PlaylistManager {
       String? url = await ensureStreamUrl(playlistId, firstItem.id);
 
       if (url != null) {
-        await dlnaService.addToPlaylist(device, url, firstItem.title, firstItem.thumbnailUrl);
+        // 【修正】YouTube IDを取得
+        final ytId = _extractYoutubeId(firstItem.originalUrl);
+
+        // 【修正】youtubeVideoIdを渡す
+        await dlnaService.addToPlaylist(
+            device,
+            url,
+            firstItem.title,
+            firstItem.thumbnailUrl,
+            youtubeVideoId: ytId // 追加
+        );
         await dlnaService.playFromPlaylist(device, 0);
 
         _playlists[pIndex].items[startIndex] = firstItem.copyWith(isPlaying: true, isQueued: true);
