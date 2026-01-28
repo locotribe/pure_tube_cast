@@ -66,6 +66,151 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
   String? _existingPlaylistId;
   bool _isUpdateMode = false;
 
+  // 比較用の「骨格」文字列を生成するヘルパー
+  String _generateSkeleton(String input) {
+    String s = input.trim().toLowerCase();
+
+    // 全角英数を半角へ (簡易版)
+    s = s
+        .replaceAll('０', '0')
+        .replaceAll('１', '1')
+        .replaceAll('Ｉ', 'I')
+        .replaceAll('ｌ', 'l')
+        .replaceAll('Ｏ', 'O')
+        .replaceAll('ｏ', 'o');
+
+    // 紛らわしい文字の統一 (l, I, 1, | -> 1 / O, 0 -> 0)
+    s = s.replaceAll(RegExp(r'[lI1|]'), '1');
+    s = s.replaceAll(RegExp(r'[O0]'), '0');
+
+    // 空白の除去
+    s = s.replaceAll(RegExp(r'\s'), '');
+
+    return s;
+  }
+
+  DuplicateStatus _checkDuplicateLevel(String input) {
+    final target = input.trim();
+    if (target.isEmpty) return DuplicateStatus.none;
+
+    // 1. 完全一致チェック
+    final normalizedTarget = target.toLowerCase();
+    for (var playlist in _playlistManager.currentPlaylists) {
+      if (playlist.name.trim().toLowerCase() == normalizedTarget) {
+        return DuplicateStatus.exactMatch;
+      }
+    }
+
+    // 2. 視覚的類似チェック
+    final skeletonTarget = _generateSkeleton(target);
+    for (var playlist in _playlistManager.currentPlaylists) {
+      if (_generateSkeleton(playlist.name) == skeletonTarget) {
+        return DuplicateStatus.visualMatch;
+      }
+    }
+
+    return DuplicateStatus.none;
+  }
+
+  void _showCreatePlaylistDialog() {
+    final controller = TextEditingController();
+    // 重複チェックの結果を管理
+    final ValueNotifier<DuplicateStatus> statusNotifier =
+    ValueNotifier(DuplicateStatus.none);
+
+    // テキスト変更時に重複チェックを実行
+    controller.addListener(() {
+      statusNotifier.value = _checkDuplicateLevel(controller.text);
+    });
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("新規フォルダ作成"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                labelText: "フォルダ名",
+                hintText: "例: 後で見る",
+              ),
+              autofocus: true,
+            ),
+            const SizedBox(height: 8),
+            // エラー/警告メッセージ表示 (ステータス変化時のみ更新)
+            ValueListenableBuilder<DuplicateStatus>(
+              valueListenable: statusNotifier,
+              builder: (context, status, child) {
+                if (status == DuplicateStatus.exactMatch) {
+                  return const Text(
+                    "この名前のフォルダは既に存在します",
+                    style: TextStyle(color: Colors.red, fontSize: 12),
+                  );
+                } else if (status == DuplicateStatus.visualMatch) {
+                  return const Row(
+                    children: [
+                      Icon(Icons.warning_amber, color: Colors.orange, size: 16),
+                      SizedBox(width: 4),
+                      Expanded(
+                          child: Text(
+                            "紛らわしい名前のフォルダが存在します",
+                            style: TextStyle(color: Colors.orange, fontSize: 12),
+                          )),
+                    ],
+                  );
+                }
+                return const SizedBox.shrink();
+              },
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("キャンセル"),
+          ),
+          // 【修正】AnimatedBuilderを使って、文字入力のたびにボタン状態を再評価する
+          AnimatedBuilder(
+            animation: controller,
+            builder: (context, child) {
+              final text = controller.text.trim();
+              // ボタン有効化の条件: 文字があり、かつ 完全一致の重複がないこと
+              final bool isValid =
+                  text.isNotEmpty && statusNotifier.value != DuplicateStatus.exactMatch;
+
+              return ElevatedButton(
+                onPressed: isValid
+                    ? () {
+                  final newName = controller.text.trim();
+                  _playlistManager.createPlaylist(newName);
+
+                  // 作成したプレイリストを選択状態にする
+                  if (_playlistManager.currentPlaylists.isNotEmpty) {
+                    final newId =
+                        _playlistManager.currentPlaylists.last.id;
+                    setState(() {
+                      _selectedPlaylistId = newId;
+                    });
+                  }
+
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(widget.parentContext).showSnackBar(
+                    SnackBar(content: Text("「$newName」を作成しました")),
+                  );
+                }
+                    : null, // 条件を満たさない場合は無効化
+                child: const Text("作成"),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -337,24 +482,47 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
                     const SizedBox(height: 12),
 
                     // プレイリスト選択（更新モード時は無効化または固定表示）
-                    DropdownButtonFormField<String>(
-                      value: _selectedPlaylistId,
-                      decoration: const InputDecoration(
-                        labelText: "保存先フォルダ",
-                        border: OutlineInputBorder(),
-                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      ),
-                      items: _playlistManager.currentPlaylists.map((p) {
-                        return DropdownMenuItem(
-                          value: p.id,
-                          child: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                        );
-                      }).toList(),
-                      onChanged: _isUpdateMode ? null : (val) { // 更新モード時は変更不可
-                        setState(() {
-                          _selectedPlaylistId = val;
-                        });
-                      },
+
+                    // 【変更】Rowで囲んで右側に新規作成ボタンを追加
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            value: _selectedPlaylistId,
+                            decoration: const InputDecoration(
+                              labelText: "保存先フォルダ",
+                              border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            ),
+                            items: _playlistManager.currentPlaylists.map((p) {
+                              return DropdownMenuItem(
+                                value: p.id,
+                                child: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                              );
+                            }).toList(),
+                            onChanged: _isUpdateMode ? null : (val) { // 更新モード時は変更不可
+                              setState(() {
+                                _selectedPlaylistId = val;
+                              });
+                            },
+                          ),
+                        ),
+
+                        // 更新モードでない場合のみ新規作成ボタンを表示
+                        if (!_isUpdateMode) ...[
+                          const SizedBox(width: 8),
+                          IconButton(
+                            onPressed: _showCreatePlaylistDialog, // 追加したメソッドを呼び出す
+                            icon: const Icon(Icons.create_new_folder),
+                            tooltip: "新規フォルダ作成",
+                            style: IconButton.styleFrom(
+                              backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
 
                     const SizedBox(height: 16),
@@ -586,4 +754,10 @@ class _SharedUrlModalContentState extends State<_SharedUrlModalContent> {
       ),
     );
   }
+}
+// 判定結果を返すEnum
+enum DuplicateStatus {
+  none,        // 問題なし
+  exactMatch,  // 完全一致（作成不可）
+  visualMatch, // 視覚的に酷似（警告表示）
 }
