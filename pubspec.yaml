@@ -2,7 +2,7 @@ name: pure_tube_cast
 description: "YouTube caster for old devices"
 publish_to: 'none'
 
-version: 1.18.1+1
+version: 1.18.2+1
 
 environment:
     sdk: ^3.5.3
@@ -11,37 +11,32 @@ dependencies:
     flutter:
         sdk: flutter
 
-    # --- ここから修正・固定した依存関係 ---
-
-    # 最新版(3.x)はコード修正が必要になるため、元の2.x系に戻して固定します
-    youtube_explode_dart: 2.0.2
-
-    # Android Gradleエラーを回避するため、安定版に固定します
-    share_plus: 9.0.0
-    url_launcher: 6.2.6
-    shared_preferences: 2.2.3
-    path_provider: 2.1.3
-    receive_sharing_intent: 1.8.1
-
-    # その他のライブラリ（これらはそのままで概ね大丈夫です）
+    youtube_explode_dart: ^2.0.2
     upnp_client: ^1.0.1
     xml: ^6.3.0
+    receive_sharing_intent: ^1.8.1
+    shared_preferences: ^2.2.2
     cupertino_icons: ^1.0.8
     http: ^1.2.0
+    url_launcher: ^6.2.0
     html: ^0.15.4
     multicast_dns: ^0.3.3
+    share_plus: 7.0.0
 
     # ADB接続用パッケージ
     flutter_adb: ^0.1.1
 
-    # 暗号化ライブラリ
+    # 暗号化ライブラリ (flutter_adbが内部で使用)
     pointycastle: ^3.7.3
+    path_provider: ^2.1.2
 
 dev_dependencies:
     flutter_test:
         sdk: flutter
-    # バージョン整合性を保つため少し下げておくと安心です
-    flutter_lints: ^4.0.0
+    flutter_lints: ^5.0.0
 
 flutter:
     uses-material-design: true
+
+dependency_overrides:
+    win32: 5.15.0

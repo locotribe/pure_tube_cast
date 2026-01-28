@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import '../managers/playlist_manager.dart';
 import '../services/dlna_service.dart';
+import 'package:share_plus/share_plus.dart';
 
 class LibraryView extends StatefulWidget {
   const LibraryView({super.key});
@@ -401,14 +402,21 @@ class LibraryViewState extends State<LibraryView> {
 
                 const SizedBox(height: 12),
                 const Divider(),
-
-// --- 【修正】ブラウザで開く（共有）ボタン ---
+                // --- 【修正】ブラウザで開くリンク (実体は共有機能) ---
                 TextButton.icon(
-                  icon: const Icon(Icons.share, color: Colors.blue), // アイコンを open_in_browser から share に変更
-                  label: const Text("ブラウザを選択して開く (共有)", style: TextStyle(color: Colors.blue, decoration: TextDecoration.underline)),
+                  icon: const Icon(Icons.open_in_browser, color: Colors.blue),
+                  label: const Text("この動画をブラウザで開く", style: TextStyle(color: Colors.blue, decoration: TextDecoration.underline)),
                   onPressed: () {
-                    // 【修正】launchUrl ではなく Share.share を使用
-                    Share.share(item.originalUrl);
+                    // URLが空でないか確認してから共有シートを表示
+                    if (item.originalUrl.isNotEmpty) {
+                      // 【変更点】url_launcherではなくShare.shareを使用
+                      // これによりOSの共有シートが開き、ユーザーが任意のブラウザを選択できます
+                      Share.share(item.originalUrl);
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('URLが無効です')),
+                      );
+                    }
                   },
                 ),
               ],
