@@ -14,6 +14,7 @@ import 'cast_page.dart';
 import '../managers/theme_manager.dart';
 import '../views/shared_url_modal.dart';
 import '../views/remote_view.dart';
+import 'help_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -177,7 +178,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // WebVideoViewや直接共有で使用するため残す
   Future<void> _fetchInfoAndShowAddDialog(String url) async {
     showDialog(
       context: context,
@@ -214,7 +214,6 @@ class _HomePageState extends State<HomePage> {
     _showAddSiteDialog(initialName: title, initialUrl: url, initialIconUrl: iconUrl);
   }
 
-  // WebVideoViewで使用するため残す
   void _showAddSiteDialog({String? initialName, String? initialUrl, String? initialIconUrl}) {
     final nameController = TextEditingController(text: initialName);
     final urlController = TextEditingController(text: initialUrl);
@@ -266,8 +265,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // 【削除】_showSelectionModal は shared_url_modal.dart に移行したため削除
-
   @override
   Widget build(BuildContext context) {
     final themeManager = ThemeManager();
@@ -306,7 +303,7 @@ class _HomePageState extends State<HomePage> {
             ),
             ExpansionTile(
               leading: const Icon(Icons.settings),
-              title: const Text("設定"),
+              title: const Text("モード設定"),
               initiallyExpanded: false,
               children: [
                 StreamBuilder<ThemeMode>(
@@ -338,6 +335,35 @@ class _HomePageState extends State<HomePage> {
                           onChanged: (value) => themeManager.setThemeMode(value!),
                         ),
                       ],
+                    );
+                  },
+                ),
+              ],
+            ),
+            const Divider(), // 区切り線を入れると見やすいです
+            ExpansionTile(
+              leading: const Icon(Icons.help_outline),
+              title: const Text("ヘルプ & 使い方"),
+              childrenPadding: const EdgeInsets.only(left: 20), // インデントをつけて階層を表現
+              children: [
+                _buildHelpLink(context, "1. 接続と準備", 'connection'),
+                _buildHelpLink(context, "2. サイト管理", 'sites'),
+                _buildHelpLink(context, "3. 再生・ライブラリ", 'playback'),
+                _buildHelpLink(context, "4. 整理・活用", 'organize'),
+                _buildHelpLink(context, "5. リンク更新", 'update'),
+                _buildHelpLink(context, "6. リモコン", 'remote'),
+                _buildHelpLink(context, "7. 困ったときは", 'troubleshoot'),
+                _buildHelpLink(context, "8. アプリ設定", 'settings'),
+
+                // 「すべて見る」オプション（一番上へ）
+                ListTile(
+                  title: const Text("マニュアルTOPへ", style: TextStyle(color: Colors.grey)),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const HelpPage()),
                     );
                   },
                 ),
@@ -381,6 +407,21 @@ class _HomePageState extends State<HomePage> {
         unselectedItemColor: Colors.grey,
         type: BottomNavigationBarType.fixed,
       ),
+    );
+  }
+
+  Widget _buildHelpLink(BuildContext context, String title, String sectionId) {
+    return ListTile(
+      title: Text(title, style: const TextStyle(fontSize: 14)),
+      dense: true,
+      visualDensity: VisualDensity.compact,
+      leading: const Icon(Icons.article_outlined, size: 20, color: Colors.blueGrey),
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => HelpPage(initialSection: sectionId)),
+        );
+      },
     );
   }
 }
