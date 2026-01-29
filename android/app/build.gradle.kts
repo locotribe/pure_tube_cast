@@ -1,3 +1,15 @@
+// android/app/build.gradle.kts
+
+// 1. 冒頭にインポート文を追加
+import java.util.Properties
+
+// 2. key.properties の読み込み処理を修正
+val keystorePropertiesFile = rootProject.file("key.properties")
+val keystoreProperties = Properties() // インポートしたので直接書けます
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(keystorePropertiesFile.inputStream())
+}
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -9,14 +21,22 @@ android {
     compileSdk = flutter.compileSdkVersion
     ndkVersion = "27.0.12077973"
 
+    signingConfigs {
+        create("release") {
+            // 安全のため、ファイルが存在しない場合のフォールバックを考慮
+            keyAlias = keystoreProperties["keyAlias"] as? String ?: ""
+            keyPassword = keystoreProperties["keyPassword"] as? String ?: ""
+            storeFile = file(keystoreProperties["storeFile"] as? String ?: "dummy.jks")
+            storePassword = keystoreProperties["storePassword"] as? String ?: ""
+        }
+    }
+
     compileOptions {
-        // 【修正】Java 11 に設定
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
 
     kotlinOptions {
-        // 【修正】Kotlinも 11 に設定
         jvmTarget = "11"
     }
 
@@ -30,7 +50,7 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 }

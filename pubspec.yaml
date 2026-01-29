@@ -2,7 +2,7 @@ name: pure_tube_cast
 description: "Kodi (XBMC) へのキャストに特化した高機能動画送信アプリ。YouTubeプレイリスト一括解析や、ADB連携によるKodi遠隔起動に対応。"
 publish_to: 'none'
 
-version: 1.18.10+1
+version: 1.18.11+1
 
 environment:
     sdk: ^3.5.3
