@@ -1,16 +1,48 @@
-# pure_tube_cast
+# 動画キャスト for Kodi
 
-YouTube caster for old devices
+Kodi (XBMC) へのキャストと遠隔操作に特化した高機能メディアコントロールアプリ。
 
-## Getting Started
+## ⚠️ 重要：ご利用の前提条件
 
-This project is a starting point for a Flutter application.
+本アプリは、受信側のデバイス（Fire TV Stick, Android TV, PC等）に **Kodi (旧XBMC) アプリがインストールされ、ネットワーク内で稼働していること** を前提として設計されています。Kodiユーザーのための専用ツールです。
 
-A few resources to get you started if this is your first Flutter project:
+## 主な特徴
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+### 1. Kodi連携に特化したキャスト機能
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+* **高度な再生制御**: 標準的なキャストに加え、Kodi専用プロトコルを使用して再生速度の変更（2倍速〜32倍速）、詳細なシーク、音量調整をスマホから操作できます。
+* **セッション同期**: Kodi側の再生状況を監視し、アプリ内のプレイリストと再生位置を自動で同期・復元します。
+
+### 2. Kodiを遠隔起動（ADB連携）
+
+* **ワンタップ起動**: テレビ側でKodiが終了していても、ADB（Android Debug Bridge）接続を通じてスマホから遠隔でKodiを起動し、前面に表示させることが可能です。
+
+### 3. 強力なライブラリ管理
+
+* **YouTubeプレイリスト一括取込**: 共有されたURLから動画を自動解析し、リスト内の全動画をライブラリへ一括登録できます。
+* **自分専用のプレイリスト**: 取り込んだ動画をフォルダ分け（プレイリスト作成）して管理し、連続再生や並び替えが自由に行えます。
+* **スマートURL更新**: 有効期限が切れて再生できなくなった動画リンクも、ブラウザからの再共有で簡単に情報を最新状態へ更新できます。
+
+### 4. 快適な操作環境
+
+* **アプリ内ブラウザ**: よく使う動画サイトをブックマーク登録し、素早く動画を探してキャストできます。
+* **ダークモード対応**: 夜間の視聴時でも目に優しいダークテーマに切り替え可能です。
+
+## クイックスタート
+
+1. **Kodi側の準備**:
+* 「設定 > サービス > コントロール」から、HTTP経由のリモート制御を許可してください。
+* Fire TV等の場合は「開発者オプション」でADBデバッグを有効にしてください。
+
+
+2. **接続**: アプリの「接続」タブからデバイスを検索・選択します。
+3. **キャスト**: YouTube等のアプリから「共有」を選択し、本アプリへURLを送ってください。
+
+---
+
+### 開発者向け情報
+
+このプロジェクトは Flutter で構築されています。
+
+* **主要パッケージ**: `youtube_explode_dart`, `flutter_adb`, `shared_preferences`, `http`
+* **ビルド環境**: Android SDK (minSdk 21)

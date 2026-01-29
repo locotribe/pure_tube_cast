@@ -21,7 +21,7 @@ class MyApp extends StatelessWidget {
       initialData: themeManager.currentThemeMode,
       builder: (context, snapshot) {
         return MaterialApp(
-          title: 'PureTube Cast',
+          title: '動画キャスト for Kodi',
           // ライトテーマ定義
           theme: ThemeData(
             primarySwatch: Colors.red,

@@ -307,7 +307,7 @@ class _HomePageState extends State<HomePage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("PureTube Cast"),
+        title: const Text("動画キャスト"),
         elevation: 0,
         actions: [],
       ),
@@ -348,7 +348,7 @@ class _HomePageState extends State<HomePage> {
                     ),
                     SizedBox(height: 12),
                     Text(
-                      'PureTube Cast',
+                      '動画キャスト for Kodi',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 24,
