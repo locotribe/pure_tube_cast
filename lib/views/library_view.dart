@@ -362,13 +362,12 @@ class LibraryViewState extends State<LibraryView> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // 【修正】移動・閉じるを上段、再生を下段に配置してオーバーフローを回避
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     TextButton.icon(
                       icon: const Icon(Icons.drive_file_move_outline),
-                      label: const Text("移動"),
+                      label: const Text("別のフォルダに移動"),
                       onPressed: () {
                         Navigator.pop(ctx);
                         _showMoveToDialog(item);
@@ -716,9 +715,71 @@ class LibraryViewState extends State<LibraryView> {
 
           // リスト本体
           Expanded(
-            child: items.isEmpty
-                ? const Center(child: Text("リストは空です", style: TextStyle(color: Colors.grey)))
-                : _buildDetailListBody(items, isConnected, currentDevice),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return Stack(
+                  children: [
+                    items.isEmpty
+                        ? const Center(child: Text("リストは空です", style: TextStyle(color: Colors.grey)))
+                        : _buildDetailListBody(items, isConnected, currentDevice),
+
+                    // スクロールバー領域に重ねる再生位置インジケータ
+                    if (!_isSelectionMode && items.isNotEmpty)
+                      Builder(
+                        builder: (context) {
+                          final playingIndex = items.indexWhere((item) => item.isPlaying);
+                          if (playingIndex == -1) return const SizedBox.shrink();
+
+                          // ドットの垂直位置を計算
+                          final double topPercent = playingIndex / (items.length - 1);
+                          const double dotSize = 10.0; // タップしやすく少しサイズを拡大
+                          const double touchAreaWidth = 30.0; // タップ反応領域を広めに確保
+
+                          // 上下のマージンを考慮してドットがはみ出さないように計算
+                          final double topPosition = topPercent * (constraints.maxHeight - dotSize);
+
+                          return Positioned(
+                            right: 0,
+                            top: topPosition,
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: () {
+                                // ステップ1で実装済みの _scrollToPlayingItem を強制的に実行するためのフラグ操作
+                                setState(() {
+                                  _hasInitialScrolled = false;
+                                });
+                                _scrollToPlayingItem(items);
+                              },
+                              child: Container(
+                                width: touchAreaWidth,
+                                height: dotSize,
+                                alignment: Alignment.centerRight,
+                                child: Container(
+                                  margin: const EdgeInsets.only(right: 1), // スクロールバーの右端に寄せる
+                                  width: dotSize,
+                                  height: dotSize,
+                                  decoration: BoxDecoration(
+                                    color: Colors.red,
+                                    shape: BoxShape.circle,
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.4),
+                                        blurRadius: 3,
+                                        spreadRadius: 1,
+                                        offset: const Offset(0, 1),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                  ],
+                );
+              },
+            ),
           ),
         ],
       ),
