@@ -2,7 +2,7 @@ name: pure_tube_cast
 description: "YouTube caster for old devices"
 publish_to: 'none'
 
-version: 1.18.5+1
+version: 1.18.6+1
 
 environment:
     sdk: ^3.5.3
@@ -10,7 +10,6 @@ environment:
 dependencies:
     flutter:
         sdk: flutter
-
     youtube_explode_dart: ^2.0.2
     upnp_client: ^1.0.1
     xml: ^6.3.0

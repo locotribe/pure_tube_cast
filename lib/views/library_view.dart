@@ -1,9 +1,8 @@
 // lib/views/library_view.dart
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../managers/playlist_manager.dart';
 import '../services/dlna_service.dart';
-import 'package:share_plus/share_plus.dart';
 
 class LibraryView extends StatefulWidget {
   const LibraryView({super.key});
@@ -274,7 +273,7 @@ class LibraryViewState extends State<LibraryView> {
 
   void _showDetailDialog(LocalPlaylistItem item, int index, bool isConnected, DlnaDevice? currentDevice) {
     Widget expiryInfo = const SizedBox.shrink();
-    Widget updateHelpMsg = const SizedBox.shrink(); // 【追加】案内メッセージ用変数
+    Widget updateHelpMsg = const SizedBox.shrink();
 
     if (item.expirationDate != null) {
       final now = DateTime.now();
@@ -309,7 +308,6 @@ class LibraryViewState extends State<LibraryView> {
         ),
       );
 
-      // 【追加】期限切れ時の案内メッセージ作成
       if (isExpired) {
         updateHelpMsg = Container(
           margin: const EdgeInsets.only(top: 8),
@@ -352,7 +350,7 @@ class LibraryViewState extends State<LibraryView> {
                 children: [
                   Text(item.title, style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center),
                   expiryInfo,
-                  updateHelpMsg, // 【追加】案内メッセージを表示
+                  updateHelpMsg,
                 ],
               ),
             ),
@@ -364,7 +362,7 @@ class LibraryViewState extends State<LibraryView> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // --- 既存のボタン列 (移動, 閉じる, 再生) ---
+                // 【修正】移動・閉じるを上段、再生を下段に配置してオーバーフローを回避
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -376,46 +374,49 @@ class LibraryViewState extends State<LibraryView> {
                         _showMoveToDialog(item);
                       },
                     ),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("閉じる")),
-                        const SizedBox(width: 8),
-                        ElevatedButton.icon(
-                          icon: const Icon(Icons.play_arrow),
-                          label: const Text("再生"),
-                          style: ElevatedButton.styleFrom(backgroundColor: isConnected ? Colors.red : Colors.grey, foregroundColor: Colors.white),
-                          onPressed: () async {
-                            if (!isConnected || currentDevice == null) {
-                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('デバイスに接続してください')));
-                              return;
-                            }
-                            final pid = _selectedPlaylistId ?? _manager.currentPlaylists.first.id;
-                            Navigator.pop(ctx);
-                            await _manager.playOrJump(currentDevice, pid, index);
-                          },
-                        ),
-                      ],
-                    ),
+                    TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("閉じる")),
                   ],
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.play_arrow),
+                    label: const Text("再生"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: isConnected ? Colors.red : Colors.grey,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    onPressed: () async {
+                      if (!isConnected || currentDevice == null) {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('デバイスに接続してください')));
+                        return;
+                      }
+                      final pid = _selectedPlaylistId ?? _manager.currentPlaylists.first.id;
+                      Navigator.pop(ctx);
+                      await _manager.playOrJump(currentDevice, pid, index);
+                    },
+                  ),
                 ),
 
                 const SizedBox(height: 12),
                 const Divider(),
-                // --- 【修正】ブラウザで開くリンク (実体は共有機能) ---
+
+                // 既存の「ブラウザで開く」ボタン（変更なし）
                 TextButton.icon(
                   icon: const Icon(Icons.open_in_browser, color: Colors.blue),
                   label: const Text("この動画をブラウザで開く", style: TextStyle(color: Colors.blue, decoration: TextDecoration.underline)),
-                  onPressed: () {
-                    // URLが空でないか確認してから共有シートを表示
-                    if (item.originalUrl.isNotEmpty) {
-                      // 【変更点】url_launcherではなくShare.shareを使用
-                      // これによりOSの共有シートが開き、ユーザーが任意のブラウザを選択できます
-                      Share.share(item.originalUrl);
-                    } else {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('URLが無効です')),
-                      );
+                  onPressed: () async {
+                    try {
+                      final uri = Uri.parse(item.originalUrl);
+                      if (await canLaunchUrl(uri)) {
+                        await launchUrl(uri, mode: LaunchMode.externalApplication);
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ブラウザを開けませんでした')));
+                      }
+                    } catch (e) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('無効なURLです')));
                     }
                   },
                 ),
@@ -825,7 +826,7 @@ class LibraryViewState extends State<LibraryView> {
                         ),
                       ),
 
-                      // サムネイル上の有効期限バッジ (Step 4で実装済み)
+                      // サムネイル上の有効期限バッジ
                       if (item.expirationDate != null)
                         Builder(
                           builder: (context) {
@@ -894,7 +895,6 @@ class LibraryViewState extends State<LibraryView> {
                   ),
                 ),
 
-                // 【修正】有効期限テキストの追加
                 subtitle: Row(
                   children: [
                     Text(item.durationStr, style: const TextStyle(fontSize: 12)),

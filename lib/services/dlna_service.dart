@@ -1,3 +1,4 @@
+// lib/services/dlna_service.dart
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -309,7 +310,7 @@ class DlnaService {
     try {
       final socket = await Socket.connect(ip, 8080, timeout: const Duration(milliseconds: 1000));
       socket.destroy();
-      _addFallbackDevice(ip, port: 8080, customName: "FireTV/Kodi");
+      _addFallbackDevice(ip, port: 8080, customName: "Kodi? ($ip)");
       _fetchDeviceInfo('http://$ip:8080/description.xml', ip);
       return;
     } catch (e) {
@@ -323,7 +324,6 @@ class DlnaService {
     }
   }
 
-  // 接続チェック強化版
   Future<bool> checkConnection(DlnaDevice device) async {
     if (await _tryConnect(device.ip, device.port)) return true;
     if (device.port != 8080) {
@@ -383,10 +383,8 @@ class DlnaService {
     } catch (e) { print("[WOL] Error: $e"); }
   }
 
-// Kodi操作系
-  // 【修正】youtubeVideoId引数を追加。指定がある場合はKodiのYouTubeアドオン用URLを使用する
+  // Kodi操作系
   Future<void> playNow(DlnaDevice device, String videoUrl, String title, String? thumbnailUrl, {String? youtubeVideoId}) async {
-    // YouTube IDがある場合はプラグインURLを生成、なければ通常のvideoUrlを使用
     final String kodiUrl = youtubeVideoId != null
         ? "plugin://plugin.video.youtube/play/?video_id=$youtubeVideoId"
         : videoUrl;
@@ -396,12 +394,11 @@ class DlnaService {
       await _sendJsonRpc(device, "Playlist.Add", {"playlistid": 1, "item": {"file": kodiUrl}});
       await _sendJsonRpc(device, "Player.Open", {"item": {"playlistid": 1, "position": 0}, "options": {"resume": false}});
     } catch (e) {
-      // 失敗時（またはDLNAデバイスの場合）は元のvideoUrl（ストリームURL）を使ってフォールバック
+      // JSON-RPC失敗時はDLNAフォールバック
       await castVideoDlna(device, videoUrl, title);
     }
   }
 
-  // 【修正】addToPlaylistにも youtubeVideoId 対応
   Future<void> addToPlaylist(DlnaDevice device, String videoUrl, String title, String? thumbnailUrl, {String? youtubeVideoId}) async {
     final String kodiUrl = youtubeVideoId != null
         ? "plugin://plugin.video.youtube/play/?video_id=$youtubeVideoId"
@@ -409,13 +406,13 @@ class DlnaService {
     await _sendJsonRpc(device, "Playlist.Add", {"playlistid": 1, "item": {"file": kodiUrl}});
   }
 
-  // 【修正】insertToPlaylistにも youtubeVideoId 対応
   Future<void> insertToPlaylist(DlnaDevice device, int position, String videoUrl, String title, String? thumbnailUrl, {String? youtubeVideoId}) async {
     final String kodiUrl = youtubeVideoId != null
         ? "plugin://plugin.video.youtube/play/?video_id=$youtubeVideoId"
         : videoUrl;
     await _sendJsonRpc(device, "Playlist.Insert", {"playlistid": 1, "position": position, "item": {"file": kodiUrl}});
   }
+
   Future<void> playFromPlaylist(DlnaDevice device, int index) async => await _sendJsonRpc(device, "Player.Open", {"item": {"playlistid": 1, "position": index}});
   Future<void> movePlaylistItem(DlnaDevice device, int fromIndex, int toIndex) async => await _sendJsonRpc(device, "Playlist.Move", {"playlistid": 1, "item": fromIndex, "to": toIndex});
   Future<void> removeFromPlaylist(DlnaDevice device, int index) async => await _sendJsonRpc(device, "Playlist.Remove", {"playlistid": 1, "position": index});
@@ -437,6 +434,7 @@ class DlnaService {
     } catch (e) { }
     return null;
   }
+
   Future<List<KodiPlaylistItem>> getPlaylistItems(DlnaDevice device) async {
     try {
       final result = await _sendJsonRpc(device, "Playlist.GetItems", {"playlistid": 1, "properties": ["title", "file"], "limits": {"start": 0, "end": 100}});
@@ -446,10 +444,19 @@ class DlnaService {
     } catch (e) { }
     return [];
   }
+
+  // 【修正】タイムアウトを10秒に延長し、エラーハンドリングを強化
   Future<dynamic> _sendJsonRpc(DlnaDevice device, String method, Map<String, dynamic> params) async {
+    // 優先順位: 1. 8080 (Kodi標準) 2. device.port (手動設定等)
+    // 通常は8080固定だが、タイムアウト対策としてポート指定を少し柔軟にする検討も可能
+    // ここでは安全のため標準の8080を使用しつつタイムアウトを延長
     final kodiUrl = Uri.parse('http://${device.ip}:8080/jsonrpc');
+
     final body = jsonEncode({"jsonrpc": "2.0", "method": method, "params": params, "id": 1});
-    final response = await http.post(kodiUrl, headers: {'Content-Type': 'application/json'}, body: body).timeout(const Duration(seconds: 5));
+
+    // タイムアウトを10秒に設定
+    final response = await http.post(kodiUrl, headers: {'Content-Type': 'application/json'}, body: body).timeout(const Duration(seconds: 10));
+
     if (response.statusCode == 200) {
       final decoded = jsonDecode(response.body);
       if (decoded.containsKey('error')) throw Exception("Kodi Error: ${decoded['error']}");
@@ -457,16 +464,20 @@ class DlnaService {
     }
     throw Exception("HTTP Error ${response.statusCode}");
   }
+
   Future<void> castVideoDlna(DlnaDevice device, String videoUrl, String title) async {
     final fullControlUrl = 'http://${device.ip}:${device.port}${device.controlUrl}';
     await _sendSoap(fullControlUrl, device.serviceType, 'SetAVTransportURI', {'InstanceID': '0', 'CurrentURI': videoUrl, 'CurrentURIMetaData': ''});
     await _sendSoap(fullControlUrl, device.serviceType, 'Play', {'InstanceID': '0', 'Speed': '1'});
   }
+
   Future<void> _sendSoap(String url, String serviceType, String action, Map<String, String> args) async {
     String argsXml = args.entries.map((e) => "<${e.key}>${e.value}</${e.key}>").join();
     String soap = '''<?xml version="1.0" encoding="utf-8"?><s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:$action xmlns:u="$serviceType">$argsXml</u:$action></s:Body></s:Envelope>''';
-    await http.post(Uri.parse(url), headers: {'Content-Type': 'text/xml; charset="utf-8"', 'SOAPAction': '"$serviceType#$action"'}, body: soap).timeout(const Duration(seconds: 5));
+    // タイムアウトを10秒に設定
+    await http.post(Uri.parse(url), headers: {'Content-Type': 'text/xml; charset="utf-8"', 'SOAPAction': '"$serviceType#$action"'}, body: soap).timeout(const Duration(seconds: 10));
   }
+
   void _stopSocketOnly() {
     _socket?.close();
     _socket = null;
@@ -479,26 +490,19 @@ class DlnaService {
     }
   }
 
-
   // ==========================================
-  // 【追加】リモコン機能用メソッド
+  // リモコン機能
   // ==========================================
 
-  /// リモコン画面用の詳細ステータス取得 (Speed, Volume等を含む)
   Future<Map<String, dynamic>?> getPlayerPropertiesForRemote(DlnaDevice device) async {
     try {
-      // 1. プレイヤー状態 (再生位置、速度、合計時間)
       final playerProps = await _sendJsonRpc(device, "Player.GetProperties", {
         "playerid": 1,
         "properties": ["time", "totaltime", "speed", "percentage"]
       });
-
-      // 2. アプリケーション状態 (音量)
       final appProps = await _sendJsonRpc(device, "Application.GetProperties", {
         "properties": ["volume", "muted"]
       });
-
-      // 3. 現在のアイテム情報
       final itemProps = await _sendJsonRpc(device, "Player.GetItem", {
         "playerid": 1,
         "properties": ["title", "thumbnail"]
@@ -506,7 +510,6 @@ class DlnaService {
 
       if (playerProps == null || appProps == null) return null;
 
-      // 時間を秒数に変換
       int currentSec = 0;
       if (playerProps['time'] != null) {
         final t = playerProps['time'];
@@ -539,7 +542,6 @@ class DlnaService {
     }
   }
 
-  /// 再生/一時停止トグル
   Future<void> togglePlayPause(DlnaDevice device) async {
     try {
       await _sendJsonRpc(device, "Player.PlayPause", {"playerid": 1, "play": "toggle"});
@@ -548,26 +550,20 @@ class DlnaService {
     }
   }
 
-  /// 前の動画へ
   Future<void> skipPrevious(DlnaDevice device) async {
     await _sendJsonRpc(device, "Player.GoTo", {"playerid": 1, "to": "previous"});
   }
 
-  /// 次の動画へ
   Future<void> skipNext(DlnaDevice device) async {
     await _sendJsonRpc(device, "Player.GoTo", {"playerid": 1, "to": "next"});
   }
 
-
-  /// 音量設定 (0-100)
   Future<void> setVolume(DlnaDevice device, int volume) async {
     await _sendJsonRpc(device, "Application.SetVolume", {"volume": volume});
   }
 
-  /// 早送り/巻き戻し (Kodi標準の速度変更: 2x, 4x, 8x... / -2x, -4x...)
   Future<void> changeSpeed(DlnaDevice device, String direction) async {
     try {
-      // direction: "increment" or "decrement"
       await _sendJsonRpc(device, "Player.SetSpeed", {
         "playerid": 1,
         "speed": direction
@@ -576,11 +572,9 @@ class DlnaService {
       print("[DlnaService] changeSpeed failed: $e");
     }
   }
-  /// 【新規】テンポ変更 (微調整用: 0.1x - 0.25x刻み)
-  /// ※環境によってはスキップ動作になる可能性があります
+
   Future<void> changeTempo(DlnaDevice device, String direction) async {
     try {
-      // direction: "increment" (加速) or "decrement" (減速)
       String action = direction == "increment" ? "tempoup" : "tempodown";
       await _sendJsonRpc(device, "Input.ExecuteAction", {"action": action});
     } catch (e) {
@@ -588,7 +582,6 @@ class DlnaService {
     }
   }
 
-  /// 速度リセット (等倍速に戻す)
   Future<void> resetSpeed(DlnaDevice device) async {
     try {
       await _sendJsonRpc(device, "Player.SetSpeed", {
@@ -600,17 +593,14 @@ class DlnaService {
     }
   }
 
-  /// 相対時間シーク (パーセント・オブジェクト形式)
   Future<void> seekRelative(DlnaDevice device, int secondsOffset) async {
     try {
-      // 1. 現在時間と合計時間を取得
       final props = await _sendJsonRpc(device, "Player.GetProperties", {
         "playerid": 1,
         "properties": ["time", "totaltime"]
       });
       if (props == null) return;
 
-      // 2. 秒数に変換
       final t = props['time'];
       int currentSec = ((t['hours'] ?? 0) * 3600) + ((t['minutes'] ?? 0) * 60) + (t['seconds'] ?? 0);
 
@@ -620,17 +610,14 @@ class DlnaService {
         totalSec = ((tt['hours'] ?? 0) * 3600) + ((tt['minutes'] ?? 0) * 60) + (tt['seconds'] ?? 0);
       }
 
-      if (totalSec == 0) return; // ライブ配信などで時間が取れない場合は何もしない
+      if (totalSec == 0) return;
 
-      // 3. ターゲット時間を計算
       int targetSec = currentSec + secondsOffset;
       if (targetSec < 0) targetSec = 0;
       if (targetSec > totalSec) targetSec = totalSec;
 
-      // 4. パーセント計算
       double progress = (targetSec / totalSec) * 100.0;
 
-      // 5. 送信 (数値を直接送らず、percentageキーを持つオブジェクトとして送る)
       await _sendJsonRpc(device, "Player.Seek", {
         "playerid": 1,
         "value": {
@@ -643,7 +630,6 @@ class DlnaService {
     }
   }
 
-  /// 数値を指定して速度を変更 (0.25x 刻み対応用)
   Future<void> setSpeed(DlnaDevice device, double speed) async {
     try {
       await _sendJsonRpc(device, "Player.SetSpeed", {
@@ -655,7 +641,6 @@ class DlnaService {
     }
   }
 
-  /// Kodiのネイティブアクションを実行 (stepforward, stepback等)
   Future<void> executeAction(DlnaDevice device, String action) async {
     try {
       await _sendJsonRpc(device, "Input.ExecuteAction", {"action": action});
@@ -664,7 +649,6 @@ class DlnaService {
     }
   }
 
-  /// パーセンテージで指定位置へシーク (0.0 - 100.0)
   Future<void> seekTo(DlnaDevice device, double percentage) async {
     try {
       await _sendJsonRpc(device, "Player.Seek", {

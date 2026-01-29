@@ -1,12 +1,12 @@
 // lib/pages/cast_page.dart
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // MethodChannel用
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../managers/playlist_manager.dart';
 import '../services/dlna_service.dart';
 import '../services/video_resolver.dart';
-import 'package:youtube_explode_dart/youtube_explode_dart.dart'; // 【追加】VideoId抽出用
+// playlist_page.dart のインポートを削除
 
 class CastPage extends StatefulWidget {
   final String? initialUrl;
@@ -76,22 +76,13 @@ class _CastPageState extends State<CastPage> {
     }
   }
 
-  // --- プレイリスト選択と追加の共通ロジック ---
-
-  // 戻り値: 追加先のプレイリストID (キャンセル時はnull)
   Future<String?> _selectPlaylistAndAdd() async {
     if (_videoMetadata == null) return null;
-
     final playlists = _playlistManager.currentPlaylists;
 
-    // リストが空なら作成（基本ありえないが念のため）
-    if (playlists.isEmpty) {
-      _playlistManager.createPlaylist("メインリスト");
-    }
+    if (playlists.isEmpty) _playlistManager.createPlaylist("メインリスト");
 
     String? targetId;
-
-    // リストが複数ある場合は選択させる
     if (playlists.length > 1) {
       targetId = await showModalBottomSheet<String>(
         context: context,
@@ -127,133 +118,86 @@ class _CastPageState extends State<CastPage> {
           );
         },
       );
-
-      // キャンセルされた場合
       if (targetId == null) return null;
-
     } else {
-      // 1つしかない場合はそれを使う
       targetId = playlists.first.id;
     }
 
-    // 選択されたリストに追加（バックグラウンド処理）
-    // ※ ここではKodiへの送信は行わない（"今すぐ再生"の場合のみ別途行う）
     _playlistManager.processAndAdd(
         _dlnaService,
         _videoMetadata!,
-        device: null, // Kodiへの自動送信はしない
+        device: null,
         targetPlaylistId: targetId
     );
 
     return targetId;
   }
 
-
-  // --- アクション ---
-
-  // 1. リストに追加して続ける (YouTubeに戻る: 最小化)
   void _addAndContinue() async {
     final targetId = await _selectPlaylistAndAdd();
-    if (targetId == null) return; // キャンセル
+    if (targetId == null) return;
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("リストに追加しました")),
-      );
-    }
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("リストに追加しました")));
 
-    // アプリ最小化
     try {
       await platform.invokeMethod('moveTaskToBack');
     } catch (e) {
       print("[CastPage] Failed to minimize: $e");
     }
-
     if (mounted) Navigator.pop(context);
   }
 
-  // 2. リストに追加して確認 (リスト画面へ)
   void _addAndCheck() async {
     final targetId = await _selectPlaylistAndAdd();
     if (targetId == null) return;
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("リストに追加しました")),
-      );
-
-      // 【修正】追加したリストIDを戻り値として返す
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("リストに追加しました")));
+      // 【修正】PlaylistPageへの遷移をやめ、単純に閉じる（ホーム画面に戻る）
       Navigator.pop(context, targetId);
     }
   }
 
-  // 3. リストに追加して今すぐ再生
   Future<void> _addAndPlayNow() async {
     final currentDevice = _dlnaService.currentDevice;
     if (currentDevice == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("デバイスに接続されていません"))
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("デバイスに接続されていません")));
       return;
     }
 
-    // まずリストに追加（UI選択含む）
     final targetId = await _selectPlaylistAndAdd();
     if (targetId == null) return;
 
     setState(() => _isLoading = true);
 
     try {
+      // v1.13.0仕様: ここでストリームURL（生URL）を取得
       final streamUrl = await _resolver.resolveStreamUrl(_videoMetadata!);
 
       if (streamUrl != null) {
-        // 【追加】YouTube IDの抽出
-        String? ytId;
-        final String originalUrl = _videoMetadata!['url'];
-        // 簡易判定
-        if (originalUrl.contains('youtube.com') || originalUrl.contains('youtu.be')) {
-          try {
-            ytId = VideoId(originalUrl).value;
-          } catch (_) {}
-        }
-
-        // Kodiのリストに追加
-        // 【修正】youtubeVideoIdを渡す
         await _dlnaService.addToPlaylist(
             currentDevice,
             streamUrl,
             _videoMetadata!['title'],
-            _videoMetadata!['thumbnailUrl'],
-            youtubeVideoId: ytId // 追加
+            _videoMetadata!['thumbnailUrl']
         );
-
-        // Kodiに対して即時再生を要求
-        // 【修正】youtubeVideoIdを渡す
         await _dlnaService.playNow(
             currentDevice,
             streamUrl,
             _videoMetadata!['title'],
-            _videoMetadata!['thumbnailUrl'],
-            youtubeVideoId: ytId // 追加
+            _videoMetadata!['thumbnailUrl']
         );
       }
-
     } catch (e) {
       print("[CastPage] Play Now Error: $e");
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("再生エラー: $e")),
-        );
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("再生エラー: $e")));
     }
 
     if (mounted) {
       setState(() => _isLoading = false);
-      // 旧: PlaylistPageへ遷移 -> 新: HomePageへ戻る
+      // 【修正】PlaylistPageへの遷移をやめ、単純に閉じる
       Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("再生を開始しました"))
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("再生を開始しました")));
     }
   }
 
@@ -261,7 +205,6 @@ class _CastPageState extends State<CastPage> {
     if (_videoMetadata == null && widget.initialUrl == null) return;
     final urlStr = _videoMetadata?['url'] ?? widget.initialUrl!;
     final Uri uri = Uri.parse(urlStr);
-
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
@@ -269,11 +212,12 @@ class _CastPageState extends State<CastPage> {
 
   @override
   Widget build(BuildContext context) {
+    // UIは変更なし
     return Stack(
       children: [
         Scaffold(
           appBar: AppBar(
-            title: const Text("動画の確認 "),
+            title: const Text("カートに追加"),
             leading: IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
           ),
           body: SingleChildScrollView(
@@ -325,9 +269,7 @@ class _CastPageState extends State<CastPage> {
                   ),
                 ),
                 const SizedBox(height: 30),
-
                 if (_videoMetadata != null) ...[
-                  // A: 続ける (最小化)
                   SizedBox(
                     width: double.infinity,
                     height: 55,
@@ -344,8 +286,6 @@ class _CastPageState extends State<CastPage> {
                     ),
                   ),
                   const SizedBox(height: 16),
-
-                  // B: 確認
                   SizedBox(
                     width: double.infinity,
                     height: 55,
@@ -361,8 +301,6 @@ class _CastPageState extends State<CastPage> {
                     ),
                   ),
                   const SizedBox(height: 16),
-
-                  // C: 今すぐ再生
                   SizedBox(
                     width: double.infinity,
                     height: 55,
@@ -379,7 +317,6 @@ class _CastPageState extends State<CastPage> {
                     ),
                   ),
                 ],
-
                 const SizedBox(height: 30),
                 TextButton.icon(
                   onPressed: _openInBrowser,
@@ -391,7 +328,6 @@ class _CastPageState extends State<CastPage> {
             ),
           ),
         ),
-
         if (_isLoading)
           Container(
             color: Colors.black.withOpacity(0.5),
@@ -401,10 +337,7 @@ class _CastPageState extends State<CastPage> {
                 children: [
                   CircularProgressIndicator(color: Colors.white),
                   SizedBox(height: 20),
-                  Text(
-                    "処理中...",
-                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
+                  Text("処理中...", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
                 ],
               ),
             ),

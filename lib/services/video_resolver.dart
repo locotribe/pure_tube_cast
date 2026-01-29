@@ -5,7 +5,6 @@ class VideoResolver {
   final YoutubeService _ytService = YoutubeService();
   final WebVideoService _webService = WebVideoService();
 
-  /// URLに応じてメタデータを取得
   Future<Map<String, dynamic>?> resolveMetadata(String url) async {
     if (_isYoutubeUrl(url)) {
       print("[Resolver] Detected YouTube URL");
@@ -16,23 +15,29 @@ class VideoResolver {
     }
   }
 
-  /// URLに応じて再生用ストリームURLを取得
+  /// 再生用URLの解決
   Future<String?> resolveStreamUrl(Map<String, dynamic> metadata) async {
     final url = metadata['url'];
 
-    // Web解析ですでにstreamUrlが見つかっている、または直リンクの場合
-    if (metadata['streamUrl'] != null) {
+    // YouTubeの場合は、ここで初めて解析して「生URL」を取得する
+    if (_isYoutubeUrl(url)) {
+      print("[Resolver] Fetching raw stream URL for Kodi...");
+      final streamUrl = await _ytService.fetchStreamUrl(url);
+      if (streamUrl != null) {
+        return streamUrl; // これが mp4 (googlevideo.com) のURL
+      }
+      // 失敗した場合は null を返す (解析エラー)
+      return null;
+    }
+
+    // 他のWeb動画
+    if (metadata['streamUrl'] != null && metadata['streamUrl'].toString().isNotEmpty) {
       return metadata['streamUrl'];
     }
     if (metadata['isDirectFile'] == true) {
       return url;
     }
 
-    if (_isYoutubeUrl(url)) {
-      return await _ytService.fetchStreamUrl(url);
-    }
-
-    // ここに来る＝Webサイトだが解析時に動画URLが見つからなかった場合
     return null;
   }
 
