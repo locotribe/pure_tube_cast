@@ -51,7 +51,7 @@ class YoutubeService {
       final playlist = await _yt.playlists.get(playlistId);
 
       // 動画一覧を取得 (最初の20件だけ取得するなど制限も可能)
-      final videos = await _yt.playlists.getVideos(playlistId).take(50).toList();
+      final videos = await _yt.playlists.getVideos(playlistId).toList();
 
       return {
         'title': playlist.title,

@@ -69,7 +69,7 @@ class _HomePageState extends State<HomePage> {
       if (uri.queryParameters.containsKey('list')) {
         final listId = uri.queryParameters['list']!;
         if (!listId.startsWith('RD')) {
-          _importPlaylist(url);
+          _handlePlaylistImport(url, listId);
           return;
         }
       }
@@ -134,6 +134,39 @@ class _HomePageState extends State<HomePage> {
 
   // --- 各アクション ---
 
+  void _handlePlaylistImport(String url, String listId) async {
+    final existingIndex = _playlistManager.currentPlaylists.indexWhere((p) => p.remoteSourceId == listId);
+
+    if (existingIndex != -1) {
+      final existingPlaylist = _playlistManager.currentPlaylists[existingIndex];
+      final bool? update = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text("プレイリストの取り込み"),
+          content: Text("このプレイリストは既に「${existingPlaylist.name}」として登録されています。\n新しく追加された動画のみを取り込みますか？"),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text("新規作成"),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text("差分を取り込む"),
+            ),
+          ],
+        ),
+      );
+
+      if (update == null) return;
+      if (update) {
+        _importPlaylist(url, targetPlaylistId: existingPlaylist.id);
+        return;
+      }
+    }
+
+    _importPlaylist(url);
+  }
+
   void _navigateToCastPage(String url) async {
     final result = await Navigator.push(
       context,
@@ -149,7 +182,7 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  Future<void> _importPlaylist(String url) async {
+  Future<void> _importPlaylist(String url, {String? targetPlaylistId}) async {
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -165,14 +198,17 @@ class _HomePageState extends State<HomePage> {
       ),
     );
 
-    final newId = await _playlistManager.importFromYoutubePlaylist(url);
+    final newId = await _playlistManager.importFromYoutubePlaylist(url, targetPlaylistId: targetPlaylistId);
 
     if (!mounted) return;
     Navigator.pop(context);
 
     if (newId != null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("プレイリストを取り込みました")));
-      setState(() => _selectedIndex = 1);
+      setState(() {
+        _selectedIndex = 1;
+      });
+      _libraryKey.currentState?.openPlaylist(newId);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("プレイリストの取得に失敗しました")));
     }

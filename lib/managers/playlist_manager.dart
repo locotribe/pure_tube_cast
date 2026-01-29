@@ -1,3 +1,4 @@
+// lib/managers/playlist_manager.dart
 import 'dart:async';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -557,16 +558,52 @@ class PlaylistManager {
   }
 
   // --- プレイリスト取り込み ---
-  Future<String?> importFromYoutubePlaylist(String url) async {
+  Future<String?> importFromYoutubePlaylist(String url, {String? targetPlaylistId}) async {
     try {
       final info = await _ytService.fetchPlaylistInfo(url);
       if (info == null) return null;
 
-      final String title = info['title'] ?? "YouTube Playlist";
       final List itemsData = info['items'] ?? [];
+      final String? remoteId = (Uri.tryParse(url)?.queryParameters['list']);
 
+      if (targetPlaylistId != null) {
+        // 差分読み込みモード
+        final pIndex = _playlists.indexWhere((p) => p.id == targetPlaylistId);
+        if (pIndex != -1) {
+          final existingUrls = _playlists[pIndex].items.map((i) => _normalizeUrl(i.originalUrl)).toSet();
+          int addedCount = 0;
+          final baseId = DateTime.now().millisecondsSinceEpoch;
+
+          for (var item in itemsData) {
+            final normalizedUrl = _normalizeUrl(item['url']);
+            if (!existingUrls.contains(normalizedUrl)) {
+              _playlists[pIndex].items.add(LocalPlaylistItem(
+                id: "${baseId}_${addedCount++}",
+                title: item['title'],
+                originalUrl: item['url'],
+                thumbnailUrl: item['thumbnailUrl'],
+                durationStr: item['duration'],
+                isResolving: false,
+              ));
+            }
+          }
+          if (addedCount > 0) {
+            await _saveToStorage();
+            _startBackgroundResolution(targetPlaylistId, limit: 10);
+          }
+          return targetPlaylistId;
+        }
+      }
+
+      // 新規作成モード
+      final String title = info['title'] ?? "YouTube Playlist";
       final newPlaylistId = DateTime.now().millisecondsSinceEpoch.toString();
-      final newPlaylist = PlaylistModel(id: newPlaylistId, name: title, items: []);
+      final newPlaylist = PlaylistModel(
+        id: newPlaylistId,
+        name: title,
+        items: [],
+        remoteSourceId: remoteId,
+      );
 
       int counter = 0;
       final baseId = DateTime.now().millisecondsSinceEpoch;
